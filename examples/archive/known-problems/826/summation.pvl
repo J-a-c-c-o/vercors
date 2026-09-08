@@ -1,0 +1,25 @@
+class Summation {
+    int res;
+
+    given seq<int> ar_values;
+    context N > 0;
+    context |ar_values| == N;
+    context ar != null;
+    context ar.length == N;
+    context (\forall* int k; 0 <= k && k < N; Perm(ar[k], 1\2));
+    context Perm(res, write);
+    context (\forall int k; 0 <= k && k < N; ar_values[k] == ar[k]);
+    void do_sum(int N, int[] ar) {
+      res = 0;
+
+      par (int i = 0 .. N)
+      context Perm(ar[i], 1\2);
+      context ar_values[i] == ar[i];
+      requires Reducible(res, +);
+      {
+
+          res = res + ar[i];
+      }
+    }
+
+}

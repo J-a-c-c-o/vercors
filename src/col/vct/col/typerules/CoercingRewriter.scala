@@ -2090,8 +2090,8 @@ abstract class CoercingRewriter[Pre <: Generation]()
           coerce(coercedRight, TSet(sharedType)),
         )
       case SubType(left, right) => SubType(left, right)
-      case Sum(bindings, condition, main) =>
-        Sum(bindings, bool(condition), int(main))
+      case Sum(bindings, triggers, range, body) =>
+        Sum(bindings, triggers, bool(range), int(body))
       case SuperType(left, right) => SuperType(left, right)
       case Tail(xs) => Tail(seq(xs)._1)
       case Take(xs, count) => Take(seq(xs)._1, int(count))
@@ -2195,6 +2195,9 @@ abstract class CoercingRewriter[Pre <: Generation]()
         vectorIntOp2(div, (l, r) => VectorTruncDiv(l, r)(div.blame))
       case mod @ VectorTruncMod(_, _) =>
         vectorIntOp2(mod, (l, r) => VectorTruncMod(l, r)(mod.blame))
+      case Reducible(resExpr, op) => Reducible(resExpr, op)
+      case Contribution(resExpr, value) =>
+        Contribution(resExpr, value)
       case Void() => Void()
       case Wand(left, right) => Wand(res(left), res(right))
       case With(pre, value) => With(pre, value)

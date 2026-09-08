@@ -1930,7 +1930,7 @@ case class PVLToCol[G](
       case ValSum(_, _, t, id, _, cond, _, body, _) =>
         val binding =
           new Variable(convert(t))(origin(id).sourceName(convert(id)))
-        Sum(Seq(binding), convert(cond), convert(body))
+        Sum(Seq(binding), Nil, convert(cond), convert(body))
       case ValVectorSum(_, _, rng, _, vec, _) =>
         VectorSum(convert(rng), convert(vec))
       case ValVectorCmp(_, _, left, _, right, _) =>
@@ -1943,7 +1943,19 @@ case class PVLToCol[G](
       case ValMatrixRep(_, _, inner, _) => MatrixRepeat(convert(inner))
     }
 
-  def convert(implicit e: ValPrimaryReducibleContext): Expr[G] = ??(e)
+  def convert(implicit e: ValPrimaryReducibleContext): Expr[G] =
+    e match {
+      case ValReducible(_, _, expr, _, op, _) =>
+        Reducible(convert(expr), convert(op))
+      case ValContribution(_, _, expr, _, value, _) =>
+        Contribution(convert(expr), convert(value))
+    }
+
+  def convert(implicit op: ValReducibleOperatorContext): String =
+    op match {
+      case ValReducibleOperator0(_) => "+"
+      case ValReducibleOperator1(id) => convert(id)
+    }
 
   def convert(implicit e: ValPrimaryThreadContext): Expr[G] =
     e match {

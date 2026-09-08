@@ -160,6 +160,9 @@ case class ResolveScale[Pre <: Generation]()
       case Perm(loc, p) => Perm(dispatch(loc), multiplyScales() * dispatch(p))
       case Value(loc) => addScalesImplies(Value(dispatch(loc)))
       case AutoValue(loc) => addScalesImplies(AutoValue(dispatch(loc)))
+      case r: Reducible[Pre] => r.rewrite(res = dispatch(r.res))
+      case c: Contribution[Pre] =>
+        c.rewrite(res = dispatch(c.res), value = dispatch(c.value))
       case Star(left, right) => scale(left) &* scale(right)
       case Implies(cond, cons) => Implies(dispatch(cond), scale(cons))
       case Select(cond, whenTrue, whenFalse) =>

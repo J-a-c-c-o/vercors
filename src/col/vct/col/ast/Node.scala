@@ -1536,10 +1536,11 @@ final case class Exists[G](
 @scopes[LocalHeapVariable]
 final case class Sum[G](
     bindings: Seq[Variable[G]],
-    condition: Expr[G],
-    main: Expr[G],
+    triggers: Seq[Seq[Expr[G]]],
+    range: Expr[G],
+    body: Expr[G],
 )(implicit val o: Origin)
-    extends Binder[G] with SumImpl[G]
+    extends TriggeredQuantifier[G] with SumImpl[G]
 @scopes[Variable]
 @scopes[LocalHeapVariable]
 final case class Product[G](
@@ -1978,6 +1979,11 @@ final case class Scale[G](scale: Expr[G], res: Expr[G])(
     val blame: Blame[ScaleNegative]
 )(implicit val o: Origin)
     extends Expr[G] with ScaleImpl[G] with PossibleTrigger[G]
+final case class Reducible[G](res: Expr[G], op: String)(implicit val o: Origin)
+    extends Expr[G] with ReducibleImpl[G] with ResourceTerm[G]
+final case class Contribution[G](res: Expr[G], value: Expr[G])(
+    implicit val o: Origin
+) extends Expr[G] with ContributionImpl[G] with ResourceTerm[G]
 final case class ScaleByParBlock[G](
     block: Ref[G, ParBlockDecl[G]],
     res: Expr[G],

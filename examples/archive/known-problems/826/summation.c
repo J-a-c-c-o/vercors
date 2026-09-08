@@ -4,21 +4,23 @@
 //:: tools silicon
 //:: verdict Pass
 
-float res;
+int res;
 
 /*@
-  given seq<float> ar_values;
+  given seq<int> ar_values;
   context \pointer(ar, N, 1\2);
   context Perm(res,write);
-  context ar_values == \values(ar, 0, N);
-  context_everywhere N>0;
-  context_everywhere |ar_values| == N;
+  context N > 0;
+  context |ar_values| == N;
+  context (\forall int k; 0 <= k && k < N; ar_values[k] == ar[k]);
 
-  ensures  res==(\sum int k ; 0 <= k && k < N ; ar_values[k] );
+  ensures res == (\sum int k; 0 <= k && k < N; ar_values[k]);
 @*/
-void do_sum(int N,float ar[N]){
-  res=(float)0;
-  for(int i=0;i<N;i++)
+void do_sum(int N, int ar[N]) {
+    res = 0;
+    /*@ assert res == 0; @*/
+
+
     /*@
       context ar != NULL;
       context Perm(ar[i], 1\2);
@@ -27,7 +29,8 @@ void do_sum(int N,float ar[N]){
       requires Reducible(res, +);
       ensures  Contribution(res, ar_values[i]);
     */
-  {
-    res+=ar[i];
-  }
+    for (int i = 0; i < N; i++)
+    {
+        res += ar[i];
+    }
 }

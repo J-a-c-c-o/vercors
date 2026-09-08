@@ -266,7 +266,7 @@ class Transformation(
   ): Verification[_ <: Generation] = {
     val tempUnsupported = Set[feature.Feature](
       feature.MatrixVector,
-      feature.NumericReductionOperator,
+
       feature.Models,
     )
 
@@ -503,6 +503,7 @@ case class SilverTransformation(
         CheckContractSatisfiability.withArg(checkSat),
         DesugarCollectionOperators,
         EncodeNdIndex,
+        SimplifySum,
         EncodeBitVectors.withArg(opaqueBitwiseOperators),
         // Translate internal types to domains
         ImportVector.withArg(adtImporter),

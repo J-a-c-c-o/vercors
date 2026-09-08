@@ -551,7 +551,7 @@ case class ResolveExpressionSideEffects[Pre <: Generation]()
       //     \unfolding p() in (1 with inhale p())
       // to verify.
       case Star(_, _) | Exists(_, _, _) | Forall(_, _, _) | Starall(_, _, _) |
-          Sum(_, _, _) | Product(_, _, _) | ForPerm(_, _, _) |
+          Sum(_, _, _, _) | Product(_, _, _) | ForPerm(_, _, _) |
           PolarityDependent(_, _) | Unfolding(_, _) =>
         throw DisallowedProofExpression(e)
 

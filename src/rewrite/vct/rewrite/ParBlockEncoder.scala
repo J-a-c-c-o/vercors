@@ -107,6 +107,9 @@ case class ParBlockEncoder[Pre <: Generation]() extends Rewriter[Pre] {
   val currentRanges: ScopedStack[Map[Variable[Pre], (Expr[Post], Expr[Post])]] =
     ScopedStack()
 
+  val currentSnapshots: ScopedStack[Map[Expr[Pre], Expr[Post]]] =
+    ScopedStack()
+
   // We need range values even in layered parallel blocks, since e.g. barriers need them.
   def range(v: Variable[Pre]): (Expr[Post], Expr[Post]) =
     currentRanges.find(_.contains(v)).get(v)
@@ -124,70 +127,113 @@ case class ParBlockEncoder[Pre <: Generation]() extends Rewriter[Pre] {
     result.toSet
   }
 
+  def collectContributions(region: ParRegion[Pre]): Seq[Expr[Pre]] = {
+    val result = mutable.ListBuffer[Expr[Pre]]()
+    def search(e: Expr[Pre]): Unit = e.foreach {
+      case c: Contribution[Pre] => result.addOne(c.res)
+      case _ =>
+    }
+    region match {
+      case ParParallel(regions) => regions.flatMap(collectContributions)
+      case ParSequential(regions) => regions.flatMap(collectContributions)
+      case block: ParBlock[Pre] =>
+        search(block.ensures)
+        search(block.requires)
+        search(block.context_everywhere)
+        result.toSeq
+    }
+  }
+
   def quantify(block: ParBlock[Pre], expr: Expr[Pre], nonEmpty: Boolean)(
       implicit o: Origin
   ): Expr[Post] = {
     val exprs = AstBuildHelpers.unfoldStar(expr)
     val vars = block.iters.map(_.variable).toSet
 
-    val rewrittenExpr = exprs.map(e => {
-      val quantVars =
-        if (nonEmpty)
-          depVars(vars, e)
-        else
-          vars
-      val nonQuantVars = vars.diff(quantVars)
+    val rewrittenExpr = exprs.map {
+      case r @ Reducible(res, op) =>
+        implicit val o: Origin = r.o
+        Perm(exprToLoc(AmbiguousLocation(res)(r.o))(r.o), WritePerm())(r.o)
 
-      val scale =
-        (x: Expr[Post]) =>
-          nonQuantVars.foldLeft(x)((body, iter) => {
-            val scale = to(iter) - from(iter)
-            Scale(scale, body)(PanicBlame(
-              "Par block was checked to be non-empty"
-            ))(body.o)
-          })
-
-      if (quantVars.isEmpty)
-        scale(dispatch(e))
-      else
-        variables.scope {
-          localHeapVariables.scope {
-            val range = quantVars.map(v =>
-              from(v) <= Local[Post](succ(v)) && Local[Post](succ(v)) < to(v)
-            ).reduceOption[Expr[Post]](And(_, _)).getOrElse(tt)
-
-            val (body, implies) =
-              e match {
-                case i @ Implies(ant, b) if depVars(vars, ant).isEmpty =>
-                  (b, Some(ant, i.o))
-                case _ => (e, None)
-              }
-
-            val res =
-              body match {
-                case Forall(bindings, Nil, body) =>
-                  Forall(
-                    variables.dispatch(bindings ++ quantVars),
-                    Nil,
-                    range ==> scale(dispatch(body)),
-                  )(body.o)
-                case s @ Starall(bindings, Nil, body) =>
-                  Starall(
-                    variables.dispatch(bindings ++ quantVars),
-                    Nil,
-                    range ==> scale(dispatch(body)),
-                  )(s.blame)(body.o)
-                case other =>
-                  Starall(
-                    variables.dispatch(quantVars),
-                    Nil,
-                    range ==> scale(dispatch(other)),
-                  )(ParBlockNotInjective(block, other))(other.o)
-              }
-            implies.map(i => Implies(dispatch(i._1), res)(i._2)).getOrElse(res)
-          }
+      case c @ Contribution(res, value) =>
+        implicit val o: Origin = c.o
+        val oldRes: Expr[Post] = currentSnapshots.find(_.contains(res)) match {
+          case Some(m) => m(res)
+          case None => ???
         }
-    })
+
+        val sum = variables.scope {
+          val quantVars = block.iters.map(v => variables.dispatch(v.variable)).toList
+
+          val range = block.iters.map(v =>
+            from(v.variable) <= Local[Post](succ(v.variable)) &&
+            Local[Post](succ(v.variable)) < to(v.variable)
+          ).reduceOption[Expr[Post]](And(_, _)).getOrElse(tt)
+
+          Sum(quantVars, Nil, range, dispatch(value))(c.o)
+        }
+
+        Perm(exprToLoc(AmbiguousLocation(res)(c.o))(c.o), WritePerm())(c.o) &*
+          (dispatch(res) === (oldRes + sum))(c.o)
+
+      case e =>
+        val quantVars =
+          if (nonEmpty)
+            depVars(vars, e)
+          else
+            vars
+        val nonQuantVars = vars.diff(quantVars)
+
+        val scale =
+          (x: Expr[Post]) =>
+            nonQuantVars.foldLeft(x)((body, iter) => {
+              val scale = to(iter) - from(iter)
+              Scale(scale, body)(PanicBlame(
+                "Par block was checked to be non-empty"
+              ))(body.o)
+            })
+
+        if (quantVars.isEmpty)
+          scale(dispatch(e))
+        else
+          variables.scope {
+            localHeapVariables.scope {
+              val range = quantVars.map(v =>
+                from(v) <= Local[Post](succ(v)) && Local[Post](succ(v)) < to(v)
+              ).reduceOption[Expr[Post]](And(_, _)).getOrElse(tt)
+
+              val (body, implies) =
+                e match {
+                  case i @ Implies(ant, b) if depVars(vars, ant).isEmpty =>
+                    (b, Some(ant, i.o))
+                  case _ => (e, None)
+                }
+
+              val res =
+                body match {
+                  case Forall(bindings, Nil, body) =>
+                    Forall(
+                      variables.dispatch(bindings ++ quantVars),
+                      Nil,
+                      range ==> scale(dispatch(body)),
+                    )(body.o)
+                  case s @ Starall(bindings, Nil, body) =>
+                    Starall(
+                      variables.dispatch(bindings ++ quantVars),
+                      Nil,
+                      range ==> scale(dispatch(body)),
+                    )(s.blame)(body.o)
+                  case other =>
+                    Starall(
+                      variables.dispatch(quantVars),
+                      Nil,
+                      range ==> scale(dispatch(other)),
+                    )(ParBlockNotInjective(block, other))(other.o)
+                }
+              implies.map(i => Implies(dispatch(i._1), res)(i._2)).getOrElse(res)
+            }
+          }
+    }
 
     AstBuildHelpers.foldStar(rewrittenExpr)
   }
@@ -344,6 +390,30 @@ case class ParBlockEncoder[Pre <: Generation]() extends Rewriter[Pre] {
       case _ => false
     }
 
+  private def exprToLoc(loc: Location[Pre])(implicit o: Origin): Location[Post] =
+    loc match {
+      case AmbiguousLocation(expr) =>
+        expr match {
+          case dp @ DerefPointer(p) => PointerLocation(dispatch(p))(dp.blame)
+          case pas @ PointerArraySubscript(_, _) =>
+            PointerLocation(AddrOf(dispatch(pas)))(pas.blame)
+          case ps @ PointerSubscript(p, index) =>
+            PointerLocation(PointerAdd(dispatch(p), dispatch(index))(
+              PointerSubscriptToAddBlame(ps.blame)
+            ))(ps.blame)
+          case DerefHeapVariable(ref) => HeapVariableLocation(succ(ref.decl))
+          case Deref(obj, ref) => FieldLocation(dispatch(obj), succ(ref.decl))
+          case ModelDeref(obj, ref) => ModelLocation(dispatch(obj), succ(ref.decl))
+          case SilverDeref(obj, ref) =>
+            SilverFieldLocation(dispatch(obj), succ(ref.decl))
+          case expr @ ArraySubscript(arr, index) =>
+            ArrayLocation(dispatch(arr), dispatch(index))(expr.blame)
+          case PredicateApplyExpr(inv) => PredicateLocation(dispatch(inv))
+          case other => AmbiguousLocation(dispatch(other))(o)
+        }
+      case other => other.rewriteDefault()
+    }
+
   override def dispatch(stat: Statement[Pre]): Statement[Post] =
     stat match {
       case ParStatement(region) =>
@@ -351,22 +421,40 @@ case class ParBlockEncoder[Pre <: Generation]() extends Rewriter[Pre] {
         implicit val o: Origin = stat.o
         val rangeValues: mutable.Map[Variable[Pre], (Expr[Post], Expr[Post])] =
           mutable.Map()
+
+        val snapshotAssignments = mutable.ArrayBuffer[Statement[Post]]()
+        val snapshotMap = mutable.Map[Expr[Pre], Expr[Post]]()
+
         val (vars, evalRanges) = variables.collect {
-          ranges(region, rangeValues)
+          val evalR = ranges(region, rangeValues)
+
+          val contributions = collectContributions(region).distinct
+          for (res <- contributions) {
+            val resPost = dispatch(res)
+            val oldVar = variables.declare(
+              new Variable[Post](resPost.t)
+            )
+            snapshotAssignments += assignLocal(oldVar.get, resPost)
+            snapshotMap(res) = oldVar.get
+          }
+
+          evalR
         }
 
         currentRanges.having(rangeValues.toMap) {
-          var res: Statement[Post] = IndetBranch(Seq(
-            execute(region, isSingleBlock),
-            Block(Seq(check(region), Inhale(ff))),
-          ))
-          if (isSingleBlock) {
-            val condition: Expr[Post] = foldAnd(rangeValues.values.map {
-              case (low, hi) => low < hi
-            })
-            res = Branch(Seq((condition, res)))
+          currentSnapshots.having(snapshotMap.toMap) {
+            var res: Statement[Post] = IndetBranch(Seq(
+              execute(region, isSingleBlock),
+              Block(Seq(check(region), Inhale(ff))),
+            ))
+            if (isSingleBlock) {
+              val condition: Expr[Post] = foldAnd(rangeValues.values.map {
+                case (low, hi) => low < hi
+              })
+              res = Branch(Seq((condition, res)))
+            }
+            Scope(vars, Block(Seq(evalRanges) ++ snapshotAssignments ++ Seq(res)))
           }
-          Scope(vars, Block(Seq(evalRanges, res)))
         }
 
       case inv @ ParInvariant(decl, dependentInvariant, body) =>
@@ -444,6 +532,19 @@ case class ParBlockEncoder[Pre <: Generation]() extends Rewriter[Pre] {
 
   override def dispatch(e: Expr[Pre]): Expr[Rewritten[Pre]] =
     e match {
+      case r @ Reducible(res, op) =>
+        implicit val o: Origin = e.o
+        Perm(exprToLoc(AmbiguousLocation(res)(r.o))(r.o), WritePerm())(r.o)
+
+      case c @ Contribution(res, value) =>
+        implicit val o: Origin = e.o
+        val oldres: Expr[Post] = currentSnapshots.find(_.contains(res)) match {
+          case Some(m) => m(res)
+          case None => ???
+        }
+
+        Perm(exprToLoc(AmbiguousLocation(res)(c.o))(c.o), WritePerm())(c.o) &*
+          (dispatch(res) - oldres === dispatch(value))(c.o)
       case ScaleByParBlock(Ref(decl), res) if e.t == TResource[Pre]() =>
         implicit val o: Origin = e.o
         val block = blockDecl(decl)
