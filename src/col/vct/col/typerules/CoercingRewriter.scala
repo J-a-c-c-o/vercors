@@ -2090,8 +2090,8 @@ abstract class CoercingRewriter[Pre <: Generation]()
           coerce(coercedRight, TSet(sharedType)),
         )
       case SubType(left, right) => SubType(left, right)
-      case Sum(bindings, triggers, range, body) =>
-        Sum(bindings, triggers, bool(range), int(body))
+      case Sum(binding, lo, hi, body) =>
+        Sum(binding, int(lo), int(hi), int(body))
       case SuperType(left, right) => SuperType(left, right)
       case Tail(xs) => Tail(seq(xs)._1)
       case Take(xs, count) => Take(seq(xs)._1, int(count))

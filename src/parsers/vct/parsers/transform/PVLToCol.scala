@@ -1927,10 +1927,10 @@ case class PVLToCol[G](
 
   def convert(implicit e: ValPrimaryVectorContext): Expr[G] =
     e match {
-      case ValSum(_, _, t, id, _, cond, _, body, _) =>
+      case ValSum(_, _, t, id, _, lo, _, hi, _, body, _) =>
         val binding =
-          new Variable(convert(t))(origin(id).sourceName(convert(id)))
-        Sum(Seq(binding), Nil, convert(cond), convert(body))
+          new Variable[G](convert(t))(origin(id).sourceName(convert(id)))
+        Sum(binding, convert(lo), convert(hi), convert(body))
       case ValVectorSum(_, _, rng, _, vec, _) =>
         VectorSum(convert(rng), convert(vec))
       case ValVectorCmp(_, _, left, _, right, _) =>

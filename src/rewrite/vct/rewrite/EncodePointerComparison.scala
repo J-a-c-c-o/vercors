@@ -188,9 +188,10 @@ case class EncodePointerComparison[Pre <: Generation]() extends Rewriter[Pre] {
           case forperm @ ForPermWithValue(_, body) =>
             forperm
               .rewrite(body = context.having(InQuantifier()) { dispatch(body) })
-          case sum @ Sum(_, _, range, body) =>
+          case sum @ Sum(_, lo, hi, body) =>
             sum.rewrite(
-              range = context.having(InQuantifier()) { dispatch(range) },
+              lo = context.having(InQuantifier()) { dispatch(lo) },
+              hi = context.having(InQuantifier()) { dispatch(hi) },
               body = context.having(InQuantifier()) { dispatch(body) },
             )
           case product @ Product(_, condition, main) =>

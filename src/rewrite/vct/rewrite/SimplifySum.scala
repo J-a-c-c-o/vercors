@@ -1,10 +1,11 @@
 package vct.col.rewrite
 
 import vct.col.ast._
-import vct.col.{ast => col}
 import vct.col.origin.{LabelContext, Origin, PreferredName}
 import vct.col.ref.{LazyRef, Ref}
+import vct.col.rewrite.util.FreeVariables
 import vct.col.rewrite.{Generation, Rewriter, RewriterBuilder, Rewritten}
+import vct.col.check.CheckContext
 import vct.col.util.AstBuildHelpers._
 import vct.col.util.Substitute
 
@@ -12,103 +13,63 @@ import scala.collection.mutable
 
 case object SimplifySum extends RewriterBuilder {
   override def key: String = "simplifySums"
-  override def desc: String = "Replace summations with provable functions"
-
-  case class NotImplementedSum(sum: col.Sum[_])
-      extends vct.result.VerificationError.SystemError {
-    override def text: String =
-      "This sum expression cannot be reduced, since it is not of the form " +
-        "(\\sum x; lo <= x && x < hi; body) with a single integer bound variable."
-  }
+  override def desc: String =
+    "Replace summations by folds over their index range"
 }
 
 case class SimplifySum[Pre <: Generation]() extends Rewriter[Pre] {
-  import SimplifySum.NotImplementedSum
 
-  private val canonicalBound = new col.Variable[Pre](TInt[Pre]())(
-    Origin(Seq(PreferredName(Seq("sum_canon"))))
-  )
+  private val canonicalBound =
+    new Variable[Pre](TInt[Pre]())(Origin(
+      Seq(PreferredName(Seq("sum_canon")))
+    ))
 
   private def SumOrigin(preferredName: String): Origin =
     Origin(Seq(PreferredName(Seq(preferredName)), LabelContext("sum")))
 
   private case class SumAdt(
-      adtRef: LazyRef[Post, col.AxiomaticDataType[Post]],
-      acc: col.ADTFunction[Post],
+      adtRef: LazyRef[Post, AxiomaticDataType[Post]],
+      acc: ADTFunction[Post],
   )
 
-  private val sumAdts: mutable.Map[(col.Expr[_], Seq[col.Type[_]]), SumAdt] =
+  private val sumAdts: mutable.Map[(Expr[_], Seq[Type[_]]), SumAdt] =
     mutable.Map()
 
-  private def extractBoundedRange(
-      boundVar: col.Variable[Pre],
-      condition: col.Expr[Pre],
-  ): Option[(col.Expr[Pre], col.Expr[Pre], Boolean)] = {
-    condition match {
-      case col.SetMember(other, r @ col.RangeSet(lo, hi)) if isBound(other) =>
-        return Some((lo, hi, false))
-      case _ =>
-    }
-
-    def isBound(e: col.Expr[Pre]): Boolean = e match {
-      case col.Local(Ref(v)) => v eq boundVar
-      case _ => false
-    }
-
-    def conjuncts(e: col.Expr[Pre]): Seq[col.Expr[Pre]] = e match {
-      case col.And(l, r) => conjuncts(l) ++ conjuncts(r)
-      case other => Seq(other)
-    }
-
-    val conjs = conjuncts(condition)
-
-    val lo = conjs.collectFirst {
-      case col.LessEq(l, r) if isBound(r) => l
-      case col.Less(l, r) if isBound(r) => l
-    }
-
-    val hi = conjs.collectFirst {
-      case col.LessEq(l, r) if isBound(l) => (r, true)
-      case col.Less(l, r) if isBound(l) => (r, false)
-    }
-
-    for {
-      l <- lo
-      (h, incl) <- hi
-    } yield (l, h, incl)
-  }
-
   private def collectFreeVars(
-      e: col.Expr[Pre],
-      boundVar: col.Variable[Pre],
-  ): Seq[col.Variable[Pre]] = {
-    val vars = mutable.LinkedHashSet.empty[col.Variable[Pre]]
-    e.foreach {
-      case col.Local(Ref(v)) if !(v eq boundVar) => vars += v
-      case _ =>
+      e: Expr[Pre],
+      boundVar: Variable[Pre],
+      preScope: CheckContext[Pre],
+  ): Seq[Variable[Pre]] = {
+    val scope = CheckContext[Pre](scopes = preScope.withScope(Seq(boundVar)))
+    val locals = FreeVariables.freeVariables(e, scope).flatMap {
+      case FreeVariables.ReadFreeVar(Local(Ref(v))) =>
+        Some(v.asInstanceOf[Variable[Pre]])
+      case FreeVariables.ReadFreeVar(l) =>
+        Some(l.ref.decl.asInstanceOf[Variable[Pre]])
+      case _ => None
     }
-    vars.toSeq
+    locals.toSeq.distinct
   }
 
   private def sumKey(
-      body: col.Expr[Pre],
-      bound: col.Variable[Pre],
-      freeVars: Seq[col.Variable[Pre]],
-  )(implicit o: Origin): (col.Expr[_], Seq[col.Type[_]]) = {
-    val subs: Map[col.Expr[Pre], col.Expr[Pre]] =
-      Map((Local[Pre](bound.ref): col.Expr[Pre]) ->
-        (Local[Pre](canonicalBound.ref): col.Expr[Pre]))
+      body: Expr[Pre],
+      bound: Variable[Pre],
+      freeVars: Seq[Variable[Pre]],
+  )(implicit o: Origin): (Expr[_], Seq[Type[_]]) = {
+    val subs: Map[Expr[Pre], Expr[Pre]] = Map(
+      (Local[Pre](bound.ref): Expr[Pre]) ->
+        (Local[Pre](canonicalBound.ref): Expr[Pre])
+    )
     val canBody = new Substitute[Pre](subs).dispatch(body)
     (canBody, freeVars.map(v => v.t))
   }
 
   private def getSumAdt(
-      hi: col.Expr[Pre],
-      body: col.Expr[Pre],
-      bound: col.Variable[Pre],
-      freeVars: Seq[col.Variable[Pre]],
+      summandBody: Expr[Pre],
+      bound: Variable[Pre],
+      freeVars: Seq[Variable[Pre]],
   )(implicit o: Origin): SumAdt = {
-    val key = sumKey(body, bound, freeVars)
+    val key = sumKey(summandBody, bound, freeVars)
     sumAdts.get(key) match {
       case Some(adt) => adt
       case None =>
@@ -121,10 +82,10 @@ case class SimplifySum[Pre <: Generation]() extends Rewriter[Pre] {
         }
         val allVars = indexVar +: upperVar +: fvVars
 
-        val acc = new col.ADTFunction[Post](allVars, TInt())
+        val acc = new ADTFunction[Post](allVars, TInt())
 
-        var adt: col.AxiomaticDataType[Post] = null
-        val adtRef = new LazyRef[Post, col.AxiomaticDataType[Post]](adt)
+        var adt: AxiomaticDataType[Post] = null
+        val adtRef = new LazyRef[Post, AxiomaticDataType[Post]](adt)
 
         val axIndexVar = new Variable[Post](TInt())(o.where(name = "sum_axidx"))
         val axUpper = new Variable[Post](TInt())(o.where(name = "sum_axupper"))
@@ -140,73 +101,66 @@ case class SimplifySum[Pre <: Generation]() extends Rewriter[Pre] {
         val axFvLocals = axFvVars.map(v => Local[Post](v.ref))
 
         def accAppFvs(ix: Expr[Post]): Expr[Post] =
-          col.ADTFunctionInvocation[Post](
+          ADTFunctionInvocation[Post](
             Some((adtRef, Nil)),
             acc.ref,
             ix +: axUpperLocal +: axFvLocals,
           )
 
-        val baseAxiom = new col.ADTAxiom(
-          Forall[Post](
+        val baseAxiom =
+          new ADTAxiom(Forall[Post](
             axVars,
             Seq(Seq(accAppFvs(axIndexLocal))),
-            (axIndexLocal >= axUpperLocal) ==> (accAppFvs(axIndexLocal) === const[Post](0)),
-          )
-        )
+            (axIndexLocal >= axUpperLocal) ==>
+              (accAppFvs(axIndexLocal) === const[Post](0)),
+          ))
 
-        val bodyPost = dispatch(body)
-        val subs: Map[col.Expr[Post], col.Expr[Post]] =
-          freeVars.map(v => (Local[Post](succ(v)): col.Expr[Post])).zip(
-            axFvLocals
-          ).toMap +
-            ((Local[Post](succ(bound)): col.Expr[Post]) -> (axIndexLocal: col.Expr[Post]))
+        val bodyPost = dispatch(summandBody)
+        val subs: Map[Expr[Post], Expr[Post]] =
+          freeVars.map(v => (Local[Post](succ(v)): Expr[Post]))
+            .zip(axFvLocals).toMap +
+            ((Local[Post](succ(bound)): Expr[Post]) ->
+              (axIndexLocal: Expr[Post]))
 
         val summand = new Substitute[Post](subs).dispatch(bodyPost)
         val next = accAppFvs(axIndexLocal + const[Post](1))
 
-        val stepAxiom = new col.ADTAxiom(
-          Forall[Post](
+        val stepAxiom =
+          new ADTAxiom(Forall[Post](
             axVars,
             Seq(Seq(accAppFvs(axIndexLocal))),
-            (axIndexLocal < axUpperLocal) ==> (accAppFvs(axIndexLocal) === (summand + next)),
-          )
-        )
+            (axIndexLocal < axUpperLocal) ==>
+              (accAppFvs(axIndexLocal) === (summand + next)),
+          ))
 
-        adt = new col.AxiomaticDataType[Post](Seq(acc, baseAxiom, stepAxiom), Nil)(
-          SumOrigin("sum")
-        )
+        adt =
+          new AxiomaticDataType[Post](Seq(acc, baseAxiom, stepAxiom), Nil)(
+            SumOrigin("sum")
+          )
         globalDeclarations.declare(adt)
 
-        val entry = SumAdt(
-          adtRef = adtRef,
-          acc = acc,
-        )
+        val entry = SumAdt(adtRef = adtRef, acc = acc)
         sumAdts(key) = entry
         entry
     }
   }
 
-  override def dispatch(e: col.Expr[Pre]): col.Expr[Rewritten[Pre]] =
+  override def dispatch(e: Expr[Pre]): Expr[Rewritten[Pre]] =
     e match {
-      case sum @ col.Sum(Seq(bound), _, range, body) =>
+      case sum @ Sum(binding, lo, hi, body) =>
         implicit val o: Origin = sum.o
-        val boundPre = bound
         variables.scope {
-          variables.dispatch(boundPre)
-          extractBoundedRange(boundPre, range) match {
-            case None => throw NotImplementedSum(sum)
-            case Some((lo, hi, hiInclusive)) =>
-              val freeVars = collectFreeVars(body, boundPre)
-              val adt = getSumAdt(hi, body, boundPre, freeVars)
-              val finalLo: Expr[Post] = dispatch(lo)
-              val finalHi: Expr[Post] =
-                if (hiInclusive) dispatch(hi) + const[Post](1) else dispatch(hi)
-              col.ADTFunctionInvocation[Post](
-                Some((adt.adtRef, Nil)),
-                adt.acc.ref,
-                finalLo +: finalHi +: freeVars.map(v => Local[Post](succ(v))),
-              )
-          }
+          variables.dispatch(binding)
+          val preScope = CheckContext[Pre](scopes =
+            CheckContext[Pre]().withScope(Seq(binding))
+          )
+          val freeVars = collectFreeVars(body, binding, preScope)
+          val adt = getSumAdt(body, binding, freeVars)
+          ADTFunctionInvocation[Post](
+            Some((adt.adtRef, Nil)),
+            adt.acc.ref,
+            dispatch(lo) +: dispatch(hi) +: freeVars.map(v => Local[Post](succ(v))),
+          )
         }
       case other => other.rewriteDefault()
     }

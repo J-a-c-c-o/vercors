@@ -7,13 +7,21 @@ class SumSeqOfInts {
 
     requires |ys| > 10;
     void main(seq<int> ys) {
-        assert (\sum int k; 1 <= k && k < -1; ys[k] + ys[k]) == (ys[1]+ys[2]+ys[3])*2;
+        // \sum int k; lo, hi; expr  sums expr over all k with lo <= k && k < hi
+        assert (\sum int k; 2, 4; ys[k] + ys[k]) == (ys[2]+ys[3])*2;
 
 
         seq<int> xs = seq<int> {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
-        assert (\sum int k; 0 <= k && k < |xs|; xs[k]) == 55;
-        assert (\sum int k; 4 <= k && k < 6; xs[k]) == 11;
+        assert (\sum int k; 0, |xs|; xs[k]) == 55;
+        assert (\sum int k; 4, 6; xs[k]) == 11;
+
+        // empty range sums to zero
+        assert (\sum int k; 3, 3; xs[k]) == 0;
+        assert (\sum int k; 6, 4; xs[k]) == 0;
+
+        assert (\sum int k; 0, |xs|; (\sum int j; 0, |xs|; xs[k] + xs[j])) == 1100;
+
+        assert (\sum int k; 0, |xs|; (\sum int j; 0, |xs|; k % 2 == j % 2 ? xs[k] + xs[j] : 0)) == 550;
     }
 
 }
-

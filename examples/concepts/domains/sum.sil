@@ -32,6 +32,7 @@ method test(xs: Seq[Int])
 
     var s: Int;
     var i: Int;
+
     s := 0;
     i := 0;
 

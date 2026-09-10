@@ -1535,12 +1535,12 @@ final case class Exists[G](
 @scopes[Variable]
 @scopes[LocalHeapVariable]
 final case class Sum[G](
-    bindings: Seq[Variable[G]],
-    triggers: Seq[Seq[Expr[G]]],
-    range: Expr[G],
+    binding: Variable[G],
+    lo: Expr[G],
+    hi: Expr[G],
     body: Expr[G],
 )(implicit val o: Origin)
-    extends TriggeredQuantifier[G] with SumImpl[G]
+    extends Binder[G] with SumImpl[G]
 @scopes[Variable]
 @scopes[LocalHeapVariable]
 final case class Product[G](

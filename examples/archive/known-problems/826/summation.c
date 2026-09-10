@@ -14,12 +14,11 @@ int res;
   context |ar_values| == N;
   context (\forall int k; 0 <= k && k < N; ar_values[k] == ar[k]);
 
-  ensures res == (\sum int k; 0 <= k && k < N; ar_values[k]);
+  ensures res == (\sum int k; 0, N; ar_values[k]);
 @*/
 void do_sum(int N, int ar[N]) {
     res = 0;
     /*@ assert res == 0; @*/
-
 
     /*@
       context ar != NULL;
@@ -29,8 +28,7 @@ void do_sum(int N, int ar[N]) {
       requires Reducible(res, +);
       ensures  Contribution(res, ar_values[i]);
     */
-    for (int i = 0; i < N; i++)
-    {
+    for (int i = 0; i < N; i++) {
         res += ar[i];
     }
 }

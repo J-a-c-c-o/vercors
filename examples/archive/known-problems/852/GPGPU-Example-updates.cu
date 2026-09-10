@@ -15,7 +15,7 @@ Created by Mohsen Safari.
 ////////////////////////////////////////////////////////////////////////////////
 /*@
   given int contrib;
-  kernel_invariant Perm(g_sum, 1) ** (\forall* int i; i >= 0 && i < N; Perm(contrib[i], 1\2)) ** g_sum == (\sum int i; 0 <= i && i < N; contrib[i]);
+  kernel_invariant Perm(g_sum, 1) ** (\forall* int i; i >= 0 && i < N; Perm(contrib[i], 1\2)) ** g_sum == (\sum int i; 0, N; contrib[i]);
   requires Perm(g_array[\gtid], 1);
   requires (\forall* int i; i >= 0 && i < N; Perm(contrib[i], 1\2));
   requires contrib[\gtid] == 0;

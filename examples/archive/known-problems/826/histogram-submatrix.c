@@ -22,8 +22,8 @@
   context (\forall* int i1 ; 0 <= i1 && i1 < P ;
                Perm(hist[i1],write));
   ensures  (\forall int k; 0 <= k && k < P ; hist[k]==
-               (\sum int i1 ; 0 <= i1 && i1 < M ;
-                 (\sum int j1 ; 0 <= j1 && j1 < N ;
+               (\sum int i1 ; 0, M;
+                 (\sum int j1 ; 0, N ;
                    data[i1][j1]==k?1:0)));
 @*/
 void histogram(int M,int N,int step,int matrix[M][step],int P,int hist[P]){

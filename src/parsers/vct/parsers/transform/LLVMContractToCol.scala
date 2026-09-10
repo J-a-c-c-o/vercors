@@ -465,9 +465,9 @@ case class LLVMContractToCol[G](
 
   def convert(implicit e: ValPrimaryVectorContext): Expr[G] =
     e match {
-      case ValSum(_, _, t, id, _, cond, _, body, _) =>
+      case ValSum(_, _, t, id, _, lo, _, hi, _, body, _) =>
         val binding = createVariable(e, id, t)
-        Sum(Seq(binding), Nil, convert(cond), convert(body))
+        Sum(binding, convert(lo), convert(hi), convert(body))
       case ValVectorSum(_, _, rng, _, vec, _) =>
         VectorSum(convert(rng), convert(vec))
       case ValVectorCmp(_, _, left, _, right, _) =>

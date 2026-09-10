@@ -163,14 +163,16 @@ case class ParBlockEncoder[Pre <: Generation]() extends Rewriter[Pre] {
         }
 
         val sum = variables.scope {
-          val quantVars = block.iters.map(v => variables.dispatch(v.variable)).toList
-
-          val range = block.iters.map(v =>
-            from(v.variable) <= Local[Post](succ(v.variable)) &&
-            Local[Post](succ(v.variable)) < to(v.variable)
-          ).reduceOption[Expr[Post]](And(_, _)).getOrElse(tt)
-
-          Sum(quantVars, Nil, range, dispatch(value))(c.o)
+          val nested = block.iters.foldRight(dispatch(value)) {
+            case (v, inner) =>
+              Sum(
+                variables.dispatch(v.variable),
+                from(v.variable),
+                to(v.variable),
+                inner,
+              )(c.o)
+          }
+          nested
         }
 
         Perm(exprToLoc(AmbiguousLocation(res)(c.o))(c.o), WritePerm())(c.o) &*

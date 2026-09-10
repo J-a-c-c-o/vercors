@@ -31,7 +31,7 @@ class Ref {
         invariant inner(
           \array(temp,1) ** Perm(temp[0],1) **
           \array(contrib,N) ** (\forall* int k; 0 <= k && k < N ; Perm(contrib[k],1\2))
-          // temp[0]==(\sum int k; 0 <= k && k < N ; contrib[k])
+          // temp[0]==(\sum int k; 0, N; contrib[k])
         ){
           par group(int t = 0 .. N)
             context \array(contrib,N);
@@ -58,7 +58,7 @@ class Ref {
               int tmp;
               atomic(inner){
                 tmp=temp[0];
-                // tmp==(\sum int k; 0 <= k && k < N ; ar[g*N+k])
+                // tmp==(\sum int k; 0, N; ar[g*N+k])
               }
               atomic(outer){
                 res=res+tmp;

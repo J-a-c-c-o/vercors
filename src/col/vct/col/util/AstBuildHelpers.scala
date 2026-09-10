@@ -587,13 +587,6 @@ object AstBuildHelpers {
           q.rewrite(bindings = bindings, triggers = triggers, body = body)
         case q: Exists[Pre] =>
           q.rewrite(bindings = bindings, triggers = triggers, body = body)
-        case q: Sum[Pre] =>
-          q.rewrite(
-            bindings = bindings,
-            triggers = triggers,
-            range = rewriter.dispatch(q.range),
-            body = body,
-          )
       }
   }
 

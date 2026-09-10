@@ -85,7 +85,7 @@ class Kadane2D {
                     loop_invariant (\let int[] arr = acc_sums[i][j-i];
                                         (\forall* int kk; 0<=kk && kk<n; Perm({:arr[kk]:}, write)));
                     // loop_invariant (\forall int kk; 0<=kk && kk<k;
-                                // acc_sums[i][j-i][kk] == (\sum int ll; i<=ll && ll<j; as_seq[kk][ll]));
+                                // acc_sums[i][j-i][kk] == (\sum int ll; i, j; as_seq[kk][ll]));
                 @*/
                 for (int k=0; k<n; k++) {
                     /*@ loop_invariant m>0 && n>0;
@@ -102,7 +102,7 @@ class Kadane2D {
                         loop_invariant acc_sums[i][j-i].length == n;
                         loop_invariant (\let int[] arr = acc_sums[i][j-i];
                                             (\forall* int kk; 0<=kk && kk<n; Perm({:arr[kk]:}, write)));
-                        // loop_invariant acc_sums[i][j-i][k] == (\sum int ll; i<=ll && ll<l; as_seq[k][ll]);
+                        // loop_invariant acc_sums[i][j-i][k] == (\sum int ll; i, l; as_seq[k][ll]);
                     @*/
                     for (int l=i; l<j; l++) {
                         acc_sums[i][j-i][k] = acc_sums[i][j-i][k] + a[l][k];
