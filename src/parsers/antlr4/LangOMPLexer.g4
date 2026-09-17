@@ -30,6 +30,7 @@ OMP_SECTIONS: 'sections';
 
 OMP_NOWAIT: 'nowait';
 OMP_PRIVATE: 'private';
+OMP_FIRSTPRIVATE: 'firstprivate';
 OMP_SHARED: 'shared';
 OMP_SCHEDULE: 'schedule';
 OMP_STATIC: ('static');

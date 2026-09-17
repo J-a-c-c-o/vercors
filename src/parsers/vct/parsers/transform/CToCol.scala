@@ -488,8 +488,70 @@ case class CToCol[G](
     block match {
       case CompoundStatement0(_, stats, _) =>
         Scope(Nil, Block(stats.map(convert(_)) getOrElse Nil))
-      case CompoundStatement1(ompPragma, _, contract, stats, _) => ??(block)
+      case CompoundStatement1(ompPragma, _, _, stats, _) =>
+        val inner = Scope(
+          Nil,
+          Block(stats.map(convert(_)) getOrElse Nil),
+        )
+        convertOmpBlockPragma(ompPragma, inner, origin(block), blame(block))
     }
+
+  def convertOmpBlockPragma(
+      implicit pragma: OmpBlockPragmaContext,
+      block: Statement[G],
+      o: Origin,
+      blameFor: Blame[ParBlockFailure],
+  ): Statement[G] =
+    pragma match {
+      case OmpBlockPragma0("parallel", options) =>
+        OmpParallel(block, options.map(convertOmpOption))(blameFor)(o)
+      case OmpBlockPragma1("section") => OmpSection(block)(o)
+      case OmpBlockPragma2("sections") =>
+        OmpSections(block, Nil)(blameFor)(o)
+      case _ => ??(pragma)
+    }
+
+  def convertOmpLoopPragma(
+      implicit pragma: OmpLoopPragmaContext,
+      loop: Statement[G],
+      o: Origin,
+      blameFor: Blame[ParBlockFailure],
+  ): Statement[G] =
+    pragma match {
+      case OmpLoopPragma0("for", options) =>
+        OmpFor(loop, options.map(convertOmpOption))(blameFor)(o)
+      case OmpLoopPragma1("parallel", "for", options) =>
+        OmpParallel(
+          Scope(Nil, Block(Seq(OmpFor(
+            loop,
+            options.map(convertOmpOption),
+          )(blameFor)(o)))(o))(o),
+          Nil,
+        )(blameFor)(o)
+      case OmpLoopPragma2("for", "simd", _) => ??(pragma)
+      case _ => ??(pragma)
+    }
+
+  def convertOmpOption(option: OmpOptionContext): String = option match {
+    case OmpOption0("nowait") => "nowait"
+    case OmpOption1("private", _, ids, _) =>
+      s"private(${convertOmpIdList(ids).mkString(",")})"
+    case OmpOption2("shared", _, ids, _) =>
+      s"shared(${convertOmpIdList(ids).mkString(",")})"
+    case OmpOption7("firstprivate", _, ids, _) =>
+      s"firstprivate(${convertOmpIdList(ids).mkString(",")})"
+    case OmpOption3("schedule", _, "static", _) => "schedule(static)"
+    case OmpOption4("simdlen", _, len, _) => s"simdlen($len)"
+    case OmpOption5("num_threads", _, n, _) => s"numthreads($n)"
+    case OmpOption6("reduction", _, op, _, ids, _) =>
+      s"reduction(${op.getText}:${convertOmpIdList(ids).mkString(",")})"
+    case _ => ??(option)
+  }
+
+  def convertOmpIdList(ids: OmpIdListContext): Seq[String] = ids match {
+    case OmpIdList0(x) => Seq(x)
+    case OmpIdList1(x, _, xs) => x +: convertOmpIdList(xs)
+  }
 
   def convert(implicit stats: BlockItemListContext): Seq[Statement[G]] =
     convertList(BlockItemList0.unapply, BlockItemList1.unapply)(stats)
@@ -597,7 +659,7 @@ case class CToCol[G](
           contract1,
           contract2,
           c => {
-            Scope(
+            val loop = Scope(
               Nil,
               Loop[G](
                 evalOrNop(init),
@@ -607,6 +669,9 @@ case class CToCol[G](
                 convert(body),
               ),
             )
+            maybePragma
+              .map(p => convertOmpLoopPragma(p, loop, origin(stat), blame(stat)))
+              .getOrElse(loop)
           },
         )
       case IterationStatement3(
@@ -626,7 +691,7 @@ case class CToCol[G](
           contract1,
           contract2,
           c => {
-            Scope(
+            val loop = Scope(
               Nil,
               Loop[G](
                 CDeclarationStatement(new CLocalDeclaration(convert(init))),
@@ -636,6 +701,9 @@ case class CToCol[G](
                 convert(body),
               ),
             )
+            maybePragma
+              .map(p => convertOmpLoopPragma(p, loop, origin(stat), blame(stat)))
+              .getOrElse(loop)
           },
         )
     }

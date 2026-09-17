@@ -3192,7 +3192,23 @@ final case class GpgpuAtomic[G](
     after: Statement[G],
 )(implicit val o: Origin)
     extends CStatement[G] with GpgpuAtomicImpl[G]
-
+final case class OmpParallel[G](
+    block: Statement[G],
+    clauses: Seq[String],
+)(val blame: Blame[ParBlockFailure])(implicit val o: Origin)
+    extends CStatement[G] with OmpParallelImpl[G]
+final case class OmpSections[G](
+    block: Statement[G],
+    clauses: Seq[String],
+)(val blame: Blame[ParBlockFailure])(implicit val o: Origin)
+    extends CStatement[G] with OmpSectionsImpl[G]
+final case class OmpSection[G](block: Statement[G])(implicit val o: Origin)
+    extends CStatement[G] with OmpSectionImpl[G]
+final case class OmpFor[G](
+    loop: Statement[G],
+    clauses: Seq[String],
+)(val blame: Blame[ParBlockFailure])(implicit val o: Origin)
+    extends CStatement[G] with OmpForImpl[G]
 sealed trait CExpr[G] extends Expr[G] with CExprImpl[G]
 final case class CLocal[G](name: String)(val blame: Blame[FrontendDerefError])(
     implicit val o: Origin

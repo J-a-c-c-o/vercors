@@ -439,6 +439,7 @@ case class SilverTransformation(
         DesugarCoalescingOperators, // no ?.
         PinCollectionTypes, // no anonymous sequences, sets, etc.
         QuantifySubscriptAny, // no arr[*]
+        OpenMPToParBlock,
         IterationContractToParBlock,
         PropagateContextEverywhere, // inline context_everywhere into loop invariants
         EncodeArrayValues, // maybe don't target shift lemmas on generated function for \values

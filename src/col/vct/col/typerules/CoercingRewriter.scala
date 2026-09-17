@@ -2369,6 +2369,12 @@ abstract class CoercingRewriter[Pre <: Generation]()
       case proof @ FramedProof(pre, body, post) =>
         FramedProof(res(pre), body, res(post))(proof.blame)
       case Goto(lbl) => Goto(lbl)
+      case p @ OmpParallel(block, clauses) =>
+        OmpParallel(block, clauses)(p.blame)
+      case s @ OmpSections(block, clauses) =>
+        OmpSections(block, clauses)(s.blame)
+      case OmpSection(block) => OmpSection(block)
+      case f @ OmpFor(loop, clauses) => OmpFor(loop, clauses)(f.blame)
       case GpgpuAtomic(impl, before, after) => GpgpuAtomic(impl, before, after)
       case b @ GpgpuBarrier(requires, ensures, specifier) =>
         GpgpuBarrier(res(requires), res(ensures), specifier)(b.blame)
