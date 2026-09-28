@@ -21,8 +21,8 @@
 
   context (\forall int i1 = 0 .. M ; (\forall int j1 = 0 .. N; matrix[i1][j1] == data[i1][j1] ));
   context (\forall int i1 = 0 .. M ; (\forall int j1 = 0 .. N; 0 <= matrix[i1][j1] && matrix[i1][j1] < P));
-  ensures (\forall int k = 0 .. P ; hist[k] == (\sum int i1; 0, M;
-              (\sum int j1 ; 0, N ; data[i1][j1] == k ? 1 : 0)));
+  ensures (\forall int k = 0 .. P ; hist[k] == (\sum int i1 \in {0 .. M};
+              (\sum int j1 \in {0 .. N}; data[i1][j1] == k ? 1 : 0)));
   ensures (\forall int i1 = 0 .. M ; (\forall int j1=0 .. N;
               matrix[i1][j1]==\old(matrix[i1][j1])));
 @*/

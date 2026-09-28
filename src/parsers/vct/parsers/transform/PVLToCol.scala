@@ -1927,7 +1927,7 @@ case class PVLToCol[G](
 
   def convert(implicit e: ValPrimaryVectorContext): Expr[G] =
     e match {
-      case ValSum(_, _, t, id, _, lo, _, hi, _, body, _) =>
+      case ValSum(_, _, t, id, _, _, lo, _, hi, _, _, body, _) =>
         val binding =
           new Variable[G](convert(t))(origin(id).sourceName(convert(id)))
         Sum(binding, convert(lo), convert(hi), convert(body))

@@ -14,7 +14,7 @@ int res;
   context |ar_values| == N;
   context (\forall int k; 0 <= k && k < N; ar_values[k] == ar[k]);
 
-  ensures res == (\sum int k; 0, N; ar_values[k]);
+  ensures res == (\sum int k \in {0 .. N}; ar_values[k]);
 @*/
 void do_sum(int N, int ar[N]) {
     res = 0;

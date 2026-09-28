@@ -14,6 +14,38 @@ case object OpenMPToParBlock extends RewriterBuilder {
   override def desc: String =
     "Translate OpenMP parallel regions to parallel blocks."
 
+  case class Clauses(
+      privateVars: Seq[String] = Nil,
+      firstPrivateVars: Seq[String] = Nil,
+      reduction: Option[(String, Seq[String])] = None,
+      isNowait: Boolean = false,
+      isStaticSchedule: Boolean = false,
+  )
+
+  object Clauses {
+    val onFor: collection.Set[String] = collection.Set(
+      "private",
+      "firstprivate",
+      "shared",
+      "reduction",
+      "schedule",
+      "nowait",
+      "numthreads",
+    )
+
+    val onParallel: collection.Set[String] = collection.Set(
+      "shared",
+      "numthreads",
+    )
+
+    val onSections: collection.Set[String] = collection.Set.empty
+
+    val hint: String =
+      "VerCors translates `shared`, `num_threads`, `private`, `firstprivate`, " +
+        "`reduction(+)`, `schedule(static)` and `nowait` clauses of `omp for` loops, " +
+        "and only `shared` and `num_threads` clauses of `omp parallel` regions."
+  }
+
   sealed trait PPL[G] {
     def hasStaticSchedule: Boolean
     def isNoWait: Boolean
@@ -29,15 +61,14 @@ case object OpenMPToParBlock extends RewriterBuilder {
       requires: Expr[G],
       ensures: Expr[G],
       content: Statement[G],
-      clauses: Seq[String],
+      clauses: Clauses,
       o: Origin,
       blame: Blame[ParBlockFailure],
   ) extends PPL[G] {
-    override val hasStaticSchedule: Boolean =
-      clauses.contains("schedule(static)")
-    override val isNoWait: Boolean = clauses.contains("nowait")
-    override val isFor: Boolean = v.nonEmpty
-    override val origin: Origin = o
+    override def hasStaticSchedule: Boolean = clauses.isStaticSchedule
+    override def isNoWait: Boolean = clauses.isNowait
+    override def isFor: Boolean = v.nonEmpty
+    override def origin: Origin = o
   }
 
   case class PPLSeq[G](p1: PPL[G], p2: PPL[G], o: Origin) extends PPL[G] {
@@ -53,7 +84,7 @@ case object OpenMPToParBlock extends RewriterBuilder {
       p1.hasStaticSchedule && p2.hasStaticSchedule
     override val isNoWait: Boolean = p1.isNoWait && p2.isNoWait
     override val isFor: Boolean = false
-    override val origin: Origin = o
+    override def origin: Origin = o
   }
 
   case class PPLFuse[G](p1: PPL[G], p2: PPL[G]) extends PPL[G] {
@@ -61,13 +92,13 @@ case object OpenMPToParBlock extends RewriterBuilder {
       p1.hasStaticSchedule && p2.hasStaticSchedule
     override val isNoWait: Boolean = p1.isNoWait && p2.isNoWait
     override val isFor: Boolean = false
-    override val origin: Origin = p1.origin
+    override def origin: Origin = p1.origin
   }
 
-  case class CannotTranslateToParBlock(node: Node[_], message: String)
+  case class CannotTranslateToParBlock(o: Origin, message: String)
       extends UserError {
     override def code: String = "cannotTranslateOpenMP"
-    override def text: String = node.o.messageInContext(message)
+    override def text: String = o.messageInContext(message)
   }
 }
 
@@ -75,10 +106,13 @@ case class OpenMPToParBlock[Pre <: Generation]() extends Rewriter[Pre] {
   import OpenMPToParBlock._
 
   private def fail(node: Node[_], message: String): Nothing =
-    throw CannotTranslateToParBlock(node, message)
+    fail(node.o, message)
+
+  private def fail(o: Origin, message: String): Nothing =
+    throw CannotTranslateToParBlock(o, message)
 
   private def sameName(decl: Declaration[Pre], name: String): Boolean =
-    decl.o.getPreferredNameOrElse().camel.equalsIgnoreCase(name)
+    decl.o.getPreferredNameOrElse().camel == name
 
   private def statementsOf(impl: Statement[Pre]): Seq[Statement[Pre]] =
     impl match {
@@ -86,30 +120,13 @@ case class OpenMPToParBlock[Pre <: Generation]() extends Rewriter[Pre] {
       case other        => Seq(other)
     }
 
-  private def emptyBlock(
-      origin: Origin,
-      blame: Blame[ParBlockFailure],
-  ): PPLBlock[Pre] =
-    PPLBlock(
-      v = None,
-      from = None,
-      to = None,
-      context = tt,
-      requires = tt,
-      ensures = tt,
-      content = Block[Pre](Nil)(origin),
-      clauses = Nil,
-      o = origin,
-      blame = blame,
-    )
-
   override def dispatch(stat: Statement[Pre]): Statement[Post] =
     stat match {
-      case omp @ OmpParallel(block, _) =>
+      case omp @ OmpParallel(block, clauses) =>
+        checkClauses(omp, clauses, "an `omp parallel` region", Clauses.onParallel)
         val (regionVars, ppl) = translateRegion(block, omp.o, omp.blame)
-        val withReductions = applyReductions(ppl, omp, block)
-        checkWritableScope(omp, withReductions)
-        val parStatement = pplToStatement(withReductions, omp.blame)
+        checkWritableScope(omp, ppl)
+        val parStatement = pplToStatement(ppl, omp.blame)
         if (regionVars.nonEmpty)
           Scope[Post](regionVars, parStatement)(omp.o)
         else
@@ -163,7 +180,8 @@ case class OpenMPToParBlock[Pre <: Generation]() extends Rewriter[Pre] {
         )
         loopToPPL(loop, clauses, omp.blame)
 
-      case omp @ OmpSections(ompBlock, _) =>
+      case omp @ OmpSections(ompBlock, clauses) =>
+        checkClauses(omp, clauses, "an `omp sections` region", Clauses.onSections)
         val sections: Seq[PPL[Pre]] = extractBlock(ompBlock, omp).map {
           case OmpSection(sectionBlock) =>
             val (vars, ppl) =
@@ -178,11 +196,14 @@ case class OpenMPToParBlock[Pre <: Generation]() extends Rewriter[Pre] {
           case other =>
             fail(other, "An omp sections block may only contain omp section blocks.")
         }
-        sections.reduceLeft { (a, b) =>
+        sections.reduceLeftOption { (a, b) =>
           PPLPar[Pre](a, b, omp.o)
-        }
+        }.getOrElse(
+          fail(omp, "An omp sections block must contain at least one omp section.")
+        )
 
-      case omp @ OmpParallel(block, _) =>
+      case omp @ OmpParallel(block, clauses) =>
+        checkClauses(omp, clauses, "an `omp parallel` region", Clauses.onParallel)
         translateRegion(block, omp.o, omp.blame)._2
 
       case other =>
@@ -206,130 +227,112 @@ case class OpenMPToParBlock[Pre <: Generation]() extends Rewriter[Pre] {
         fail(container, "Expected a block statement.")
     }
 
-  def reductionClause(
+  private val clauseRegex = """(\w+)(?:\((.*)\))?""".r
+  private val reductionRegex = """(.*?):(.*)""".r
+
+  def checkClauses(
+      node: Node[_],
       clauses: Seq[String],
-  ): Option[(String, Seq[String])] =
-    clauses.collectFirst {
-      case c if c.startsWith("reduction(") =>
-        val rest = c.stripPrefix("reduction(").stripSuffix(")")
-        val (op, ids) = rest.span(_ != ':')
-        (op.trim, ids.drop(1).split(",").map(_.trim).toSeq)
-    }
-
-  def ompReductionClauses(
-      stmt: Statement[Pre],
-  ): Seq[(String, Seq[String])] = {
-    val result = mutable.ListBuffer[(String, Seq[String])]()
-    def rec(s: Statement[Pre]): Unit =
-      s match {
-        case Scope(_, inner) =>
-          rec(inner)
-        case Block(stats) =>
-          stats.foreach(rec)
-        case OmpFor(_, clauses) =>
-          result ++= reductionClause(clauses).toSeq
-        case OmpParallel(_, clauses) =>
-          result ++= reductionClause(clauses).toSeq
+      construct: String,
+      supported: collection.Set[String],
+  ): Clauses =
+    clauses.foldLeft(Clauses()) { (acc, clause) =>
+      val (name, args) = clause match {
+        case clauseRegex(name, args) =>
+          val names = Option(args).getOrElse("")
+          (name, names.split(",").map(_.trim).filter(_.nonEmpty).toSeq)
         case _ =>
+          fail(node, s"The clause `$clause` on $construct could not be parsed.")
       }
-    rec(stmt)
-    result.toSeq
-  }
+      if (!supported.contains(name))
+        fail(node, s"The clause `$clause` on $construct is not supported. ${Clauses.hint}")
+      (name, args) match {
+        case ("private", names)          => acc.copy(privateVars = names)
+        case ("firstprivate", names)     => acc.copy(firstPrivateVars = names)
+        case ("schedule", Seq("static")) => acc.copy(isStaticSchedule = true)
+        case ("nowait", _)               => acc.copy(isNowait = true)
+        case ("reduction", Seq(argument)) =>
+          acc.copy(reduction = Some(parseReduction(node, construct, argument)))
+        case ("shared", _) | ("numthreads", _) => acc
+        case _ => fail(node, s"The clause `$clause` on $construct is not supported.")
+      }
+    }
 
-  def applyReductions(
-      ppl: PPL[Pre],
-      container: Node[_],
-      region: Statement[Pre],
-  ): PPL[Pre] =
-    ompReductionClauses(region).foldLeft(ppl) { case (p, (op, names)) =>
-      names.foldLeft(p) { case (pp, name) =>
-        val res: Expr[Pre] = findReductionVariable(name, region).getOrElse(
-          fail(
-            container,
-            s"The reduction clause mentions $name, but we could not find such a variable in the parallel block.",
-          )
+  private def parseReduction(
+      node: Node[_],
+      construct: String,
+      argument: String,
+  ): (String, Seq[String]) =
+    argument match {
+      case reductionRegex(op, _) if op.trim != "+" =>
+        fail(
+          node,
+          s"Only `reduction(+:...)` is supported, but $construct has a `reduction($op:...)` clause.",
         )
-        withReduction(pp, op, res)
+      case reductionRegex("+", names) =>
+        ("+", names.split(",").map(_.trim).filter(_.nonEmpty).toSeq)
+      case _ =>
+        fail(node, s"The `reduction(...)` clause on $construct could not be parsed.")
+    }
+
+  def findSharedVariable(
+      name: String,
+      nodes: Seq[Node[Pre]],
+      local: collection.Set[Declaration[Pre]],
+  ): Option[Expr[Pre]] =
+    nodes.iterator.flatMap(
+      _.collectFirst {
+        case e: Local[Pre] if sameName(e.ref.decl, name) && !local.contains(e.ref.decl) => e
+        case e: DerefHeapVariable[Pre] if sameName(e.ref.decl, name) && !local.contains(e.ref.decl) => e
       }
-    }
+    ).toSeq.headOption
 
-  def findReductionVariable(
-      name: String,
-      block: Statement[Pre],
-  ): Option[Expr[Pre]] = {
-    var result: Option[Expr[Pre]] = None
-    block.foreach {
-      case l: Local[Pre] if sameName(l.ref.decl, name) =>
-        result = Some(l)
-      case d @ DerefHeapVariable(Ref(decl)) if sameName(decl, name) =>
-        result = Some(d)
-      case _ =>
-    }
-    result
+  private def localOf(e: Expr[Pre]): Option[Variable[Pre]] = e match {
+    case Local(Ref(v)) => Some(v)
+    case _             => None
   }
 
-  def findVariable(
-      name: String,
+  private def assignedVariable(node: Node[Pre]): Option[Variable[Pre]] = node match {
+    case Assign(target, _)               => localOf(target)
+    case AssignInitial(target, _)        => localOf(target)
+    case PreAssignExpression(target, _)  => localOf(target)
+    case PostAssignExpression(target, _) => localOf(target)
+    case _                               => None
+  }
+
+  def contentWrites(
       content: Statement[Pre],
-  ): Option[Variable[Pre]] = {
-    var result: Option[Variable[Pre]] = None
-    content.foreach {
-      case l: Local[Pre] if sameName(l.ref.decl, name) =>
-        result = Some(l.ref.decl)
-      case _ =>
-    }
-    result
+  ): (Set[Variable[Pre]], Set[Variable[Pre]]) = {
+    val writes = mutable.Set[Variable[Pre]]()
+    val declaresInside = mutable.Set[Variable[Pre]]()
+    def rec(node: Node[Pre]): Unit =
+      node match {
+        case LocalDecl(v) => declaresInside += v
+        case Scope(vars, inner) =>
+          vars.foreach(declaresInside += _)
+          rec(inner)
+        case other =>
+          assignedVariable(other).foreach(writes += _)
+          other.subnodes.foreach(rec)
+      }
+    rec(content)
+    (writes.toSet, declaresInside.toSet)
   }
 
-  def usesExpr(
-      content: Statement[Pre],
-      res: Expr[Pre],
-  ): Boolean = {
-    var uses = false
-    content.foreach {
-      case e: Expr[Pre] if e == res => uses = true
-      case _                        =>
-    }
-    uses
-  }
+  private def reductionVariables(block: PPLBlock[Pre]): Set[Variable[Pre]] =
+    unfoldStar(block.requires).collect {
+      case Reducible(Local(Ref(v)), _) => v
+    }.toSet
 
-  def mapPPLBlocks(
-      ppl: PPL[Pre]
-  )(f: PPLBlock[Pre] => PPLBlock[Pre]): PPL[Pre] =
-    ppl match {
-      case block: PPLBlock[Pre] => f(block)
-      case PPLSeq(a, b, o)      => PPLSeq(mapPPLBlocks(a)(f), mapPPLBlocks(b)(f), o)
-      case PPLPar(a, b, o)      => PPLPar(mapPPLBlocks(a)(f), mapPPLBlocks(b)(f), o)
-      case fused: PPLFuse[Pre]  => PPLFuse(mapPPLBlocks(fused.p1)(f), mapPPLBlocks(fused.p2)(f))
-    }
-
-  def foldPPL(ppl: PPL[Pre])(visit: PPLBlock[Pre] => Unit): Unit =
-    ppl match {
-      case block: PPLBlock[Pre] => visit(block)
-      case PPLSeq(a, b, _)      => foldPPL(a)(visit); foldPPL(b)(visit)
-      case PPLPar(a, b, _)      => foldPPL(a)(visit); foldPPL(b)(visit)
-      case fused: PPLFuse[Pre]  => foldPPL(fused.p1)(visit); foldPPL(fused.p2)(visit)
-    }
-
-  def withReduction(
-      ppl: PPL[Pre],
-      op: String,
-      res: Expr[Pre],
-  ): PPL[Pre] =
-    mapPPLBlocks(ppl) { block =>
-      if (usesExpr(block.content, res)) {
-        implicit val o: Origin = block.o
-        block.copy(requires = block.requires &* Reducible(res, op)(o))
-      } else block
-    }
 
   def checkWritableScope(
       container: Node[_],
       ppl: PPL[Pre],
   ): Unit =
-    foldPPL(ppl) { block =>
+    foldBlocks(ppl) { block =>
       val (writes, declaresInside) = contentWrites(block.content)
-      val invalid = writes -- declaresInside -- block.v.toSet
+      val invalid =
+        writes -- declaresInside -- block.v.toSet -- reductionVariables(block)
       if (invalid.nonEmpty) {
         val names = invalid.iterator
           .map(v => v.o.getPreferredNameOrElse().camel)
@@ -338,99 +341,57 @@ case class OpenMPToParBlock[Pre <: Generation]() extends Rewriter[Pre] {
           .mkString(", ")
         fail(
           container,
-          s"OpenMP parallel regions can only be verified when they consist purely of `for` loops and `sections`, " +
-            s"without thread-local declarations ($names).",
+          s"The OpenMP region writes to $names, which it shares with the enclosing scope. " +
+            "A parallel region may only be verified when it leaves such variables alone, " +
+            "reduces them with a `reduction(...)` clause, or writes to a `private(...)` or " +
+            "`firstprivate(...)` copy of them.",
         )
       }
     }
 
-  def contentWrites(
-      content: Statement[Pre],
-  ): (Set[Variable[Pre]], Set[Variable[Pre]]) = {
-    val writes = mutable.Set[Variable[Pre]]()
-    val declaresInside = mutable.Set[Variable[Pre]]()
-    def rec(s: Statement[Pre]): Unit =
-      s match {
-        case Assign(Local(Ref(v)), _) =>
-          writes += v
-        case LocalDecl(v) =>
-          declaresInside += v
-        case Scope(vars, inner) =>
-          vars.foreach(declaresInside += _)
-          rec(inner)
-        case Block(stats) =>
-          stats.foreach(rec)
-        case other =>
-          other.subnodes.foreach {
-            case s2: Statement[Pre] => rec(s2)
-            case _                  =>
-          }
+  def makePrivate(
+      body: Statement[Pre],
+      clauses: Clauses,
+      iterVar: Variable[Pre],
+      node: Node[_],
+  ): Statement[Pre] = {
+    val local = mutable.Set[Declaration[Pre]]() ++= contentWrites(body)._2
+    val copies = clauses.privateVars.map(name => (name, false)) ++
+      clauses.firstPrivateVars.map(name => (name, true))
+    copies.foldLeft(body) { case (current, (name, initialize)) =>
+      if (sameName(iterVar, name)) current
+      else {
+        val res = findSharedVariable(name, Seq(current), local.toSet).getOrElse(
+          fail(
+            node,
+            s"The clause mentions `$name`, but no such variable is in scope outside the " +
+              "`omp for` loop. Variables that the loop body declares itself are already " +
+              "thread-local and need no clause.",
+          )
+        )
+        local ++= localOf(res)
+        threadLocal(current, res, initialize)
       }
-    rec(content)
-    (writes.toSet, declaresInside.toSet)
+    }
   }
 
-  def clauseNames(
-      clauses: Seq[String],
-      key: String,
-  ): Seq[String] =
-    clauses.collectFirst {
-      case c if c.startsWith(key) =>
-        c.stripPrefix(key).stripSuffix(")").split(",").map(_.trim).toSeq
-    }.getOrElse(Nil)
-
-  def privateVariables(clauses: Seq[String]): Seq[String] =
-    clauseNames(clauses, "private(")
-
-  def firstPrivateVariables(clauses: Seq[String]): Seq[String] =
-    clauseNames(clauses, "firstprivate(")
-
-  def makePrivateVars(
+  private def threadLocal(
       content: Statement[Pre],
-      names: Seq[String],
-      iterVar: Option[Variable[Pre]],
+      res: Expr[Pre],
       initialize: Boolean,
-  ): Statement[Pre] =
-    names.foldLeft(content) { case (current, name) =>
-      if (iterVar.exists(sameName(_, name))) current
-      else
-        findVariable(name, current) match {
-          case Some(v) =>
-            implicit val o: Origin = v.o
-            val fresh = new Variable[Pre](v.t)(v.o)
-            val rewritten: Statement[Pre] =
-              new Substitute[Pre](
-                Map(
-                  Local[Pre](v.ref[Variable[Pre]]) -> Local[Pre](fresh.ref)
-                ),
-                bindingSubs = Map(v -> fresh),
-              ).dispatch(current) match {
-                case s: Statement[Pre] => s
-              }
-            val body: Statement[Pre] =
-              if (initialize)
-                Block(Seq(
-                  assignLocal(
-                    Local[Pre](fresh.ref),
-                    Local[Pre](v.ref[Variable[Pre]]),
-                  ),
-                  rewritten,
-                ))
-              else
-                rewritten
-            Scope[Pre](Seq(fresh), body)(v.o)
-          case None => current
-        }
-    }
-
-  def makePrivate(
-      content: Statement[Pre],
-      clauses: Seq[String],
-      iterVar: Option[Variable[Pre]],
   ): Statement[Pre] = {
-    val withPrivate =
-      makePrivateVars(content, privateVariables(clauses), iterVar, initialize = false)
-    makePrivateVars(content = withPrivate, firstPrivateVariables(clauses), iterVar, initialize = true)
+    implicit val o: Origin = res.o
+    val original = localOf(res).get
+    val fresh = new Variable[Pre](original.t)(original.o)
+    val renamed: Statement[Pre] = new Substitute[Pre](
+      Map(res -> Local[Pre](fresh.ref)),
+      bindingSubs = Map(original -> fresh),
+    ).dispatch(content): Statement[Pre]
+    val body =
+      if (initialize)
+        Block(Seq(assignLocal(Local[Pre](fresh.ref), res), renamed))
+      else renamed
+    Scope[Pre](Seq(fresh), body)
   }
 
   def loopToPPL(
@@ -440,35 +401,53 @@ case class OpenMPToParBlock[Pre <: Generation]() extends Rewriter[Pre] {
   ): PPLBlock[Pre] =
     loop.contract match {
       case it: IterationContract[Pre] =>
+        val parsed = checkClauses(loop, clauses, "an `omp for` loop", Clauses.onFor)
         val (v, from, to) = extractLoopData(loop)
-        val context = contextPart(it)
-        PPLBlock(
+        val block = PPLBlock[Pre](
           v = Some(v),
           from = Some(from),
           to = Some(to),
-          context = context,
-          requires = stripContext(it.requires, context),
-          ensures = stripContext(it.ensures, context),
-          content = makePrivate(loop.body, clauses, Some(v)),
-          clauses = clauses,
+          context = it.context_everywhere,
+          requires = it.requires,
+          ensures = it.ensures,
+          content = makePrivate(loop.body, parsed, v, loop),
+          clauses = parsed,
           o = loop.o,
           blame = blame,
         )
+        parsed.reduction.fold(block) { case (op, names) =>
+          withReductions(block, op, names)
+        }
       case _ =>
         fail(loop, "An omp for loop must have a loop contract with context/ensures clauses.")
     }
 
-  def contextPart(it: IterationContract[Pre]): Expr[Pre] = {
-    implicit val o: Origin = it.o
-    val contextParts =
-      unfoldStar(it.requires).toSet.intersect(unfoldStar(it.ensures).toSet)
-    foldStar(contextParts.toSeq)
-  }
-
-  def stripContext(expr: Expr[Pre], context: Expr[Pre]): Expr[Pre] = {
-    implicit val o: Origin = expr.o
-    val contextParts = unfoldStar(context).toSet
-    foldStar(unfoldStar(expr).filterNot(contextParts).toSeq)
+  def withReductions(
+      block: PPLBlock[Pre],
+      op: String,
+      names: Seq[String],
+  ): PPLBlock[Pre] = {
+    implicit val o: Origin = block.o
+    val declaredInside: collection.Set[Declaration[Pre]] =
+      contentWrites(block.content)._2.map(v => v: Declaration[Pre])
+    val reducible = names.map { name =>
+      findSharedVariable(
+        name,
+        Seq(block.requires, block.ensures, block.content),
+        declaredInside,
+      ).getOrElse(
+        fail(
+          block.o,
+          s"The reduction clause mentions `$name`, but no such variable is in scope in the " +
+            "`omp parallel` region. A reduction variable is shared with the enclosing scope, " +
+            "so it cannot be declared inside the loop body.",
+        )
+      )
+    }
+    block.copy(
+      requires =
+        reducible.foldLeft(block.requires)((acc, res) => acc &* Reducible(res, op)),
+    )
   }
 
   private def unwrapToLoop(stat: Statement[Pre]): Option[Loop[Pre]] =
@@ -534,7 +513,7 @@ case class OpenMPToParBlock[Pre <: Generation]() extends Rewriter[Pre] {
       blame: Blame[ParBlockFailure],
   ): PPLBlock[Pre] = {
     implicit val o: Origin = origin
-    PPLBlock(
+    PPLBlock[Pre](
       v = None,
       from = None,
       to = None,
@@ -542,7 +521,7 @@ case class OpenMPToParBlock[Pre <: Generation]() extends Rewriter[Pre] {
       requires = tt,
       ensures = tt,
       content = stat,
-      clauses = Nil,
+      clauses = Clauses(),
       o = origin,
       blame = blame,
     )
@@ -565,7 +544,9 @@ case class OpenMPToParBlock[Pre <: Generation]() extends Rewriter[Pre] {
     )
     pared
       .reduceLeftOption((a, b) => PPLSeq[Pre](a, b, a.origin))
-      .getOrElse(emptyBlock(defaultOrigin, defaultBlame))
+      .getOrElse(
+        plainToPPL(Block[Pre](Nil)(defaultOrigin), defaultOrigin, defaultBlame)
+      )
   }
 
   def canFuse(x: PPL[Pre], y: PPL[Pre]): Boolean =
@@ -582,6 +563,19 @@ case class OpenMPToParBlock[Pre <: Generation]() extends Rewriter[Pre] {
         if (cond(x, r.head)) op(x, r.head) +: r.tail
         else x +: r
       }
+
+  def foldBlocks(ppl: PPL[Pre])(visit: PPLBlock[Pre] => Unit): Unit =
+    ppl match {
+      case block: PPLBlock[Pre] => visit(block)
+      case PPLSeq(a, b, _)      => foldBlocks(a)(visit); foldBlocks(b)(visit)
+      case PPLPar(a, b, _)      => foldBlocks(a)(visit); foldBlocks(b)(visit)
+      case fused: PPLFuse[Pre]  => foldBlocks(fused.p1)(visit); foldBlocks(fused.p2)(visit)
+    }
+
+  def commonParts(a: Expr[Pre], b: Expr[Pre]): Expr[Pre] = {
+    implicit val o: Origin = a.o
+    foldStar(unfoldStar(a).toSet.intersect(unfoldStar(b).toSet).toSeq)
+  }
 
   def mergeContext(a: Expr[Pre], b: Expr[Pre]): Expr[Pre] = {
     implicit val o: Origin = a.o
@@ -611,12 +605,15 @@ case class OpenMPToParBlock[Pre <: Generation]() extends Rewriter[Pre] {
       ),
       bindingSubs = Map(yv -> xv),
     )
-    PPLBlock(
+    PPLBlock[Pre](
       v = x.v,
       from = x.from,
       to = x.to,
-      context = mergeContext(x.context, sub.dispatch(y.context)),
-      requires = x.requires,
+      context = tt,
+      requires = mergeContext(
+        x.requires,
+        sub.dispatch(commonParts(y.requires, y.ensures)),
+      ),
       ensures = sub.dispatch(y.ensures),
       content = Block[Pre](Seq(x.content, sub.dispatch(y.content))),
       clauses = x.clauses,
