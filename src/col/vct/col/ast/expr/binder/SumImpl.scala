@@ -1,12 +1,12 @@
 package vct.col.ast.expr.binder
 
-import vct.col.ast.{Sum, TInt, Type, Variable}
+import vct.col.ast.{Sum, Type, Variable}
 import vct.col.ast.ops.SumOps
 import vct.col.print._
 
 trait SumImpl[G] extends SumOps[G] {
   this: Sum[G] =>
-  override def t: Type[G] = TInt()
+  override def t: Type[G] = body.t
 
   override def bindings: Seq[Variable[G]] = Seq(binding)
 

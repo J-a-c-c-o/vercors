@@ -1,6 +1,7 @@
 package vct.col.rewrite
 
 import vct.col.ast._
+import vct.result.VerificationError.UserError
 import vct.col.origin.{LabelContext, Origin, PreferredName}
 import vct.col.ref.{LazyRef, Ref}
 import vct.col.rewrite.util.FreeVariables
@@ -10,6 +11,23 @@ import vct.col.util.AstBuildHelpers._
 import vct.col.util.Substitute
 
 import scala.collection.mutable
+
+object SimplifySumErrors {
+  case class CannotSumOverType(at: Origin, t: Type[_]) extends UserError {
+    override def code: String = "sumUnsupportedType"
+    override def text: String =
+      at.messageInContext(s"A sum over a value of type $t is not supported")
+  }
+
+  case class CannotSumOverLocation(at: Origin) extends UserError {
+    override def code: String = "sumOverLocation"
+    override def text: String = at.messageInContext(
+      "A sum over a pointer or an array is not supported, because an axiom " +
+        "may not read a location"
+    )
+  }
+
+}
 
 case object SimplifySum extends RewriterBuilder {
   override def key: String = "simplifySums"
@@ -24,7 +42,14 @@ case class SimplifySum[Pre <: Generation]() extends Rewriter[Pre] {
       Seq(PreferredName(Seq("sum_canon")))
     ))
 
-  private def SumOrigin(preferredName: String): Origin =
+  private def zeroOf(t: Type[Post])(implicit o: Origin): Expr[Post] = t match {
+    case TInt() | TCheckedInt(_, _) => const[Post](0)
+    case t: TFloat[Post] => FloatValue[Post](BigDecimal(0), t)(o)
+    case t =>
+      throw SimplifySumErrors.CannotSumOverType(o, t)
+  }
+
+  private def sumOrigin(preferredName: String): Origin =
     Origin(Seq(PreferredName(Seq(preferredName)), LabelContext("sum")))
 
   private case class SumAdt(
@@ -64,6 +89,11 @@ case class SimplifySum[Pre <: Generation]() extends Rewriter[Pre] {
     (canBody, freeVars.map(v => v.t))
   }
 
+  private def readsLocation(e: Node[_]): Boolean = e match {
+    case _: DerefPointer[_] | _: PointerSubscript[_] | _: ArraySubscript[_] => true
+    case _ => e.subnodes.exists(readsLocation)
+  }
+
   private def getSumAdt(
       summandBody: Expr[Pre],
       bound: Variable[Pre],
@@ -82,7 +112,9 @@ case class SimplifySum[Pre <: Generation]() extends Rewriter[Pre] {
         }
         val allVars = indexVar +: upperVar +: fvVars
 
-        val acc = new ADTFunction[Post](allVars, TInt())
+        val resultType = dispatch(summandBody).t.asInstanceOf[Type[Post]]
+        val zero = zeroOf(resultType)
+        val acc = new ADTFunction[Post](allVars, resultType)
 
         var adt: AxiomaticDataType[Post] = null
         val adtRef = new LazyRef[Post, AxiomaticDataType[Post]](adt)
@@ -112,10 +144,13 @@ case class SimplifySum[Pre <: Generation]() extends Rewriter[Pre] {
             axVars,
             Seq(Seq(accAppFvs(axIndexLocal))),
             (axIndexLocal >= axUpperLocal) ==>
-              (accAppFvs(axIndexLocal) === const[Post](0)),
+              (accAppFvs(axIndexLocal) === zero),
           ))
 
         val bodyPost = dispatch(summandBody)
+        if (readsLocation(bodyPost)) {
+          throw SimplifySumErrors.CannotSumOverLocation(o)
+        }
         val subs: Map[Expr[Post], Expr[Post]] =
           freeVars.map(v => (Local[Post](succ(v)): Expr[Post]))
             .zip(axFvLocals).toMap +
@@ -135,7 +170,7 @@ case class SimplifySum[Pre <: Generation]() extends Rewriter[Pre] {
 
         adt =
           new AxiomaticDataType[Post](Seq(acc, baseAxiom, stepAxiom), Nil)(
-            SumOrigin("sum")
+            sumOrigin("sum")
           )
         globalDeclarations.declare(adt)
 
@@ -156,11 +191,16 @@ case class SimplifySum[Pre <: Generation]() extends Rewriter[Pre] {
           )
           val freeVars = collectFreeVars(body, binding, preScope)
           val adt = getSumAdt(body, binding, freeVars)
-          ADTFunctionInvocation[Post](
+          val lower = dispatch(lo)
+          val upper = dispatch(hi)
+          val argVars = freeVars.map(v => Local[Post](succ(v)))
+          val invocation = ADTFunctionInvocation[Post](
             Some((adt.adtRef, Nil)),
             adt.acc.ref,
-            dispatch(lo) +: dispatch(hi) +: freeVars.map(v => Local[Post](succ(v))),
+            lower +: upper +: argVars,
           )
+
+          invocation
         }
       case other => other.rewriteDefault()
     }

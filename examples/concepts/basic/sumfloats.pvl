@@ -1,18 +1,17 @@
 // -*- tab-width:4 ; indent-tabs-mode:nil -*-
-//:: cases SumSeqOfInts
+//:: cases SumSeqOfFloats
 //:: tools silicon
 //:: verdict Pass
 
-class SumSeqOfInts {
+class SumSeqOfFloats {
 
     requires |ys| > 10;
-    void main(seq<int> ys) {
+    void main(seq<float64> ys) {
         assert (\sum int k \in {2..4}; ys[k] + ys[k]) == (ys[2]+ys[3])*2;
 
-
-        seq<int> xs = seq<int> {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
-        assert (\sum int k \in {0..|xs|}; xs[k]) == 55;
-        assert (\sum int k \in {4..6}; xs[k]) == 11;
+        seq<float64> xs = seq<float64> {1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0};
+        assert (\sum int k \in {0..|xs|}; xs[k]) == 55.0;
+        assert (\sum int k \in {4..6}; xs[k]) == 11.0;
 
         assert (\sum int k \in {3..3}; xs[k]) == 0;
         assert (\sum int k \in {6..4}; xs[k]) == 0;
