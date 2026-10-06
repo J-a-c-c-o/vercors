@@ -110,6 +110,8 @@ case class ParBlockEncoder[Pre <: Generation]() extends Rewriter[Pre] {
   val currentSnapshots: ScopedStack[Map[Expr[Pre], Expr[Post]]] =
     ScopedStack()
 
+  val quantifiedContributions: ScopedStack[Boolean] = ScopedStack()
+
   // We need range values even in layered parallel blocks, since e.g. barriers need them.
   def range(v: Variable[Pre]): (Expr[Post], Expr[Post]) =
     currentRanges.find(_.contains(v)).get(v)
@@ -129,9 +131,11 @@ case class ParBlockEncoder[Pre <: Generation]() extends Rewriter[Pre] {
 
   def collectContributions(region: ParRegion[Pre]): Seq[Expr[Pre]] = {
     val result = mutable.ListBuffer[Expr[Pre]]()
-    def search(e: Expr[Pre]): Unit = e.foreach {
+    def search(node: Node[Pre]): Unit = node match {
       case c: Contribution[Pre] => result.addOne(c.res)
-      case _ =>
+      case _: Starall[Pre] => ()
+      case _: Forall[Pre] => ()
+      case other => other.subnodes.foreach(search)
     }
     region match {
       case ParParallel(regions) => regions.flatMap(collectContributions)
@@ -178,66 +182,123 @@ case class ParBlockEncoder[Pre <: Generation]() extends Rewriter[Pre] {
         Perm(exprToLoc(AmbiguousLocation(res)(c.o))(c.o), WritePerm())(c.o) &*
           (dispatch(res) === (oldRes + sum))(c.o)
 
-      case e =>
-        val quantVars =
-          if (nonEmpty)
-            depVars(vars, e)
-          else
-            vars
-        val nonQuantVars = vars.diff(quantVars)
-
-        val scale =
-          (x: Expr[Post]) =>
-            nonQuantVars.foldLeft(x)((body, iter) => {
-              val scale = to(iter) - from(iter)
-              Scale(scale, body)(PanicBlame(
-                "Par block was checked to be non-empty"
-              ))(body.o)
-            })
-
-        if (quantVars.isEmpty)
-          scale(dispatch(e))
-        else
+      case q @ Starall(bindings, Nil, Implies(guard, Reducible(res, op))) =>
+        variables.scope {
+          val postBindings = variables.dispatch(bindings)
           variables.scope {
-            localHeapVariables.scope {
-              val range = quantVars.map(v =>
-                from(v) <= Local[Post](succ(v)) && Local[Post](succ(v)) < to(v)
-              ).reduceOption[Expr[Post]](And(_, _)).getOrElse(tt)
-
-              val (body, implies) =
-                e match {
-                  case i @ Implies(ant, b) if depVars(vars, ant).isEmpty =>
-                    (b, Some(ant, i.o))
-                  case _ => (e, None)
-                }
-
-              val res =
-                body match {
-                  case Forall(bindings, Nil, body) =>
-                    Forall(
-                      variables.dispatch(bindings ++ quantVars),
-                      Nil,
-                      range ==> scale(dispatch(body)),
-                    )(body.o)
-                  case s @ Starall(bindings, Nil, body) =>
-                    Starall(
-                      variables.dispatch(bindings ++ quantVars),
-                      Nil,
-                      range ==> scale(dispatch(body)),
-                    )(s.blame)(body.o)
-                  case other =>
-                    Starall(
-                      variables.dispatch(quantVars),
-                      Nil,
-                      range ==> scale(dispatch(other)),
-                    )(ParBlockNotInjective(block, other))(other.o)
-                }
-              implies.map(i => Implies(dispatch(i._1), res)(i._2)).getOrElse(res)
-            }
+            Starall(
+              postBindings,
+              Nil,
+              dispatch(guard) ==> contributionPerm(res)(q.o),
+            )(q.blame)(q.o)
           }
+        }
+
+      case q @ Starall(
+            bindings,
+            Nil,
+            Implies(guard, c @ Contribution(res, value)),
+          ) =>
+        variables.scope {
+          val postBindings = variables.dispatch(bindings)
+          variables.scope {
+            val quantifierGuard = dispatch(guard)
+
+            val sum = block.iters.foldRight(dispatch(value)) {
+              case (v, inner) =>
+                Sum(
+                  variables.dispatch(v.variable),
+                  from(v.variable),
+                  to(v.variable),
+                  inner,
+                )(c.o)
+            }
+
+            Starall(
+              postBindings,
+              Nil,
+              quantifierGuard ==> contributionPerm(res)(c.o),
+            )(q.blame)(c.o) &*
+              Forall(
+                postBindings,
+                Nil,
+                quantifierGuard ==> (dispatch(res) === sum),
+              )(c.o)
+          }
+        }
+
+      case e =>
+        encodeClause(block, vars, nonEmpty, e)
     }
 
     AstBuildHelpers.foldStar(rewrittenExpr)
+  }
+
+  def contributionPerm(res: Expr[Pre])(implicit o: Origin): Expr[Post] =
+    Perm(exprToLoc(AmbiguousLocation(res)(o))(o), WritePerm())(o)
+
+  def encodeClause(
+      block: ParBlock[Pre],
+      vars: Set[Variable[Pre]],
+      nonEmpty: Boolean,
+      e: Expr[Pre],
+  )(implicit o: Origin): Expr[Post] = {
+    val quantVars =
+      if (nonEmpty)
+        depVars(vars, e)
+      else
+        vars
+    val nonQuantVars = vars.diff(quantVars)
+
+    val scale =
+      (x: Expr[Post]) =>
+        nonQuantVars.foldLeft(x)((body, iter) => {
+          val scale = to(iter) - from(iter)
+          Scale(scale, body)(PanicBlame(
+            "Par block was checked to be non-empty"
+          ))(body.o)
+        })
+
+    if (quantVars.isEmpty)
+      scale(dispatch(e))
+    else
+      variables.scope {
+        localHeapVariables.scope {
+          val range = quantVars.map(v =>
+            from(v) <= Local[Post](succ(v)) && Local[Post](succ(v)) < to(v)
+          ).reduceOption[Expr[Post]](And(_, _)).getOrElse(tt)
+
+          val (body, implies) =
+            e match {
+              case i @ Implies(ant, b) if depVars(vars, ant).isEmpty =>
+                (b, Some(ant, i.o))
+              case _ => (e, None)
+            }
+
+          val res =
+            body match {
+              case Forall(bindings, Nil, body) =>
+                Forall(
+                  variables.dispatch(bindings ++ quantVars),
+                  Nil,
+                  range ==> scale(dispatch(body)),
+                )(body.o)
+              case s @ Starall(bindings, Nil, body) =>
+                Starall(
+                  variables.dispatch(bindings ++ quantVars),
+                  Nil,
+                  range ==> scale(dispatch(body)),
+                )(s.blame)(body.o)
+              case other =>
+                Starall(
+                  variables.dispatch(quantVars),
+                  Nil,
+                  range ==> scale(dispatch(other)),
+                )(ParBlockNotInjective(block, other))(other.o)
+            }
+          implies.map(i => Implies(dispatch(i._1), res)(i._2)).getOrElse(res)
+        }
+      }
   }
 
   def requires(region: ParRegion[Pre], nonEmpty: Boolean)(
@@ -540,13 +601,24 @@ case class ParBlockEncoder[Pre <: Generation]() extends Rewriter[Pre] {
 
       case c @ Contribution(res, value) =>
         implicit val o: Origin = e.o
-        val oldres: Expr[Post] = currentSnapshots.find(_.contains(res)) match {
-          case Some(m) => m(res)
-          case None => ???
+        if (quantifiedContributions.exists(identity)) {
+          contributionPerm(res)(c.o) &*
+            (dispatch(res) === dispatch(value))(c.o)
+        } else {
+          val oldres: Expr[Post] =
+            currentSnapshots.find(_.contains(res)) match {
+              case Some(m) => m(res)
+              case None => ???
+            }
+
+          contributionPerm(res)(c.o) &*
+            (dispatch(res) - oldres === dispatch(value))(c.o)
         }
 
-        Perm(exprToLoc(AmbiguousLocation(res)(c.o))(c.o), WritePerm())(c.o) &*
-          (dispatch(res) - oldres === dispatch(value))(c.o)
+      case q @ Starall(bindings, triggers, guarded)
+          if isQuantifiedContribution(guarded) =>
+        quantifiedContributions.having(true) { q.rewriteDefault() }
+
       case ScaleByParBlock(Ref(decl), res) if e.t == TResource[Pre]() =>
         implicit val o: Origin = e.o
         val block = blockDecl(decl)
@@ -560,4 +632,10 @@ case class ParBlockEncoder[Pre <: Generation]() extends Rewriter[Pre] {
       case ScaleByParBlock(Ref(_), res) => dispatch(res)
       case other => other.rewriteDefault()
     }
+
+  def isQuantifiedContribution(e: Expr[Pre]): Boolean = e match {
+    case Implies(_, body) => isQuantifiedContribution(body)
+    case _: Contribution[Pre] => true
+    case _ => false
+  }
 }

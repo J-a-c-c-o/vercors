@@ -59,7 +59,14 @@ object FreeVariables {
       node: Node[G],
       scope: CheckContext[G] = CheckContext[G](),
   ): Set[FreeVariable[G]] =
-    flatFreeVariables(node, scope) ++
-      node.subnodes.flatMap(freeVariables(_, node.enterCheckContext(scope)))
-        .toSet
+    freeVariablesInOrder(node, scope).toSet
+
+  def freeVariablesInOrder[G](
+      node: Node[G],
+      scope: CheckContext[G] = CheckContext[G](),
+  ): Seq[FreeVariable[G]] =
+    flatFreeVariables(node, scope).toSeq ++
+      node.subnodes.flatMap(
+        freeVariablesInOrder(_, node.enterCheckContext(scope))
+      )
 }

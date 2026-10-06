@@ -17,6 +17,9 @@ class SumSeqOfInts {
         assert (\sum int k \in {3..3}; xs[k]) == 0;
         assert (\sum int k \in {6..4}; xs[k]) == 0;
 
+        assert (\sum int k \in {3..6}; 1) == 3;
+        assert (\sum int k \in {3..6}; (k == 4 ? 1 : 0)) == 1;
+
         assert (\sum int k \in {0..|xs|}; (\sum int j \in {0..|xs|}; xs[k] + xs[j])) == 1100;
 
         assert (\sum int k \in {0..|xs|}; (\sum int j \in {0..|xs|}; k % 2 == j % 2 ? xs[k] + xs[j] : 0)) == 550;

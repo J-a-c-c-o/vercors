@@ -43,8 +43,8 @@ case class SimplifySum[Pre <: Generation]() extends Rewriter[Pre] {
     ))
 
   private def zeroOf(t: Type[Post])(implicit o: Origin): Expr[Post] = t match {
-    case TInt() | TCheckedInt(_, _) => const[Post](0)
-    case t: TFloat[Post] => FloatValue[Post](BigDecimal(0), t)(o)
+    case _: IntType[Post] => const[Post](0)
+    case t: FloatType[Post] => FloatValue[Post](BigDecimal(0), t)(o)
     case t =>
       throw SimplifySumErrors.CannotSumOverType(o, t)
   }
@@ -66,7 +66,7 @@ case class SimplifySum[Pre <: Generation]() extends Rewriter[Pre] {
       preScope: CheckContext[Pre],
   ): Seq[Variable[Pre]] = {
     val scope = CheckContext[Pre](scopes = preScope.withScope(Seq(boundVar)))
-    val locals = FreeVariables.freeVariables(e, scope).flatMap {
+    val locals = FreeVariables.freeVariablesInOrder(e, scope).flatMap {
       case FreeVariables.ReadFreeVar(Local(Ref(v))) =>
         Some(v.asInstanceOf[Variable[Pre]])
       case FreeVariables.ReadFreeVar(l) =>
@@ -76,6 +76,16 @@ case class SimplifySum[Pre <: Generation]() extends Rewriter[Pre] {
     locals.toSeq.distinct
   }
 
+  private val canonicalFreeVars: mutable.Map[Int, Variable[Pre]] = mutable.Map()
+
+  private def canonicalFree(i: Int): Variable[Pre] =
+    canonicalFreeVars.getOrElseUpdate(
+      i,
+      new Variable[Pre](TInt[Pre]())(Origin(
+        Seq(PreferredName(Seq(s"sum_canon_fv$i")))
+      )),
+    )
+
   private def sumKey(
       body: Expr[Pre],
       bound: Variable[Pre],
@@ -84,7 +94,10 @@ case class SimplifySum[Pre <: Generation]() extends Rewriter[Pre] {
     val subs: Map[Expr[Pre], Expr[Pre]] = Map(
       (Local[Pre](bound.ref): Expr[Pre]) ->
         (Local[Pre](canonicalBound.ref): Expr[Pre])
-    )
+    ) ++ freeVars.zipWithIndex.map { case (v, i) =>
+      (Local[Pre](v.ref): Expr[Pre]) ->
+        (Local[Pre](canonicalFree(i).ref): Expr[Pre])
+    }
     val canBody = new Substitute[Pre](subs).dispatch(body)
     (canBody, freeVars.map(v => v.t))
   }

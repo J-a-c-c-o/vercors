@@ -1,0 +1,37 @@
+// -*- tab-width:2 ; indent-tabs-mode:nil -*-
+//:: cases MatVecReduction
+//:: tools silicon
+//:: verdict Pass
+
+class MatVecReduction {
+  given seq<int> xs;
+  given seq<int> rows;
+  given seq<int> cols;
+  given seq<int> vals;
+
+  context y != null ** M > 0 ** C > 0 ** y.length == C;
+  context |xs| == M ** |rows| == M ** |cols| == M ** |vals| == M;
+  context (\forall int t; 0 <= t && t < M; 0 <= xs[t]);
+  context (\forall int t; 0 <= t && t < M; 0 <= rows[t] && rows[t] < M);
+  context (\forall int t; 0 <= t && t < M; 0 <= cols[t] && cols[t] < C);
+  context (\forall* int c; 0 <= c && c < C; Perm(y[c], write));
+
+  ensures (\forall int c; 0 <= c && c < C;
+    y[c] == (\sum int t \in {0 .. M}; cols[t] == c ? xs[rows[t]] * vals[t] : 0));
+
+  void matvec(int M, int C, int[C] y) {
+    par main(int c = 0 .. C)
+    context Perm(y[c], write);
+    ensures y[c] == 0;
+    {
+      y[c] = 0;
+    }
+
+    par (int t = 0 .. M)
+    requires (\forall* int c; 0 <= c && c < C; Reducible(y[c], +));
+    ensures (\forall* int c; 0 <= c && c < C; Contribution(y[c], cols[t] == c ? xs[rows[t]] * vals[t] : 0));
+    {
+      y[cols[t]] = y[cols[t]] + xs[rows[t]] * vals[t];
+    }
+  }
+}
