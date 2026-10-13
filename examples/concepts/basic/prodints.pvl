@@ -1,0 +1,28 @@
+// -*- tab-width:4 ; indent-tabs-mode:nil -*-
+//:: cases ProdSeqOfInts
+//:: tools silicon
+//:: verdict Pass
+
+class ProdSeqOfInts {
+
+    requires |ys| > 10;
+    void main(seq<int> ys) {
+        seq<int> xs = seq<int> {1, 2, 3, 4, 5};
+
+        assert (\prod int k \in {0..|xs|}; xs[k]) == 120;
+        assert (\prod int k \in {3..5}; xs[k]) == 20;
+        assert (\prod int k \in {1..3}; xs[k]) == 6;
+
+        assert (\prod int k \in {3..3}; xs[k]) == 1;
+        assert (\prod int k \in {6..4}; xs[k]) == 1;
+
+        assert (\prod int k \in {2..6}; 1) == 1;
+        assert (\prod int k \in {2..6}; (k == 4 ? 3 : 1)) == 3;
+
+        assert (\prod int k \in {2..4}; ys[k] * ys[k]) == ys[2]*ys[2]*ys[3]*ys[3];
+
+        assert (\prod int k \in {0..3}; (\prod int j \in {0..2}; xs[k] + xs[j])) == 1440;
+        assert (\sum int k \in {0..3}; (\prod int j \in {0..3}; xs[k] * xs[j])) == 216;
+    }
+
+}

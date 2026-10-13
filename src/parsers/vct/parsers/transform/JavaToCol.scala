@@ -2528,6 +2528,10 @@ case class JavaToCol[G](
         val binding =
           new Variable[G](convert(t))(origin(id).sourceName(convert(id)))
         Sum(binding, convert(lo), convert(hi), convert(body))
+      case ValProd(_, _, t, id, _, _, lo, _, hi, _, _, body, _) =>
+        val binding =
+          new Variable[G](convert(t))(origin(id).sourceName(convert(id)))
+        Product(binding, convert(lo), convert(hi), convert(body))
       case ValVectorSum(_, _, rng, _, vec, _) =>
         VectorSum(convert(rng), convert(vec))
       case ValVectorCmp(_, _, left, _, right, _) =>

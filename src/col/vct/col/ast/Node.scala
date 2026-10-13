@@ -1544,9 +1544,10 @@ final case class Sum[G](
 @scopes[Variable]
 @scopes[LocalHeapVariable]
 final case class Product[G](
-    bindings: Seq[Variable[G]],
-    condition: Expr[G],
-    main: Expr[G],
+    binding: Variable[G],
+    lo: Expr[G],
+    hi: Expr[G],
+    body: Expr[G],
 )(implicit val o: Origin)
     extends Binder[G] with ProductImpl[G]
 @scopes[Variable]

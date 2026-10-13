@@ -1800,8 +1800,6 @@ abstract class CoercingRewriter[Pre <: Generation]()
       case ProcessSelect(cond, whenTrue, whenFalse) =>
         ProcessSelect(bool(cond), process(whenTrue), process(whenFalse))
       case ProcessSeq(left, right) => ProcessSeq(process(left), process(right))
-      case Product(bindings, condition, main) =>
-        Product(bindings, bool(condition), int(main))
       case ProverFunctionInvocation(ref, args) =>
         ProverFunctionInvocation(ref, coerceArgs(args, ref.decl))
       case p @ PVLChorPerm(endpoint, loc, perm) =>
@@ -2092,6 +2090,8 @@ abstract class CoercingRewriter[Pre <: Generation]()
       case SubType(left, right) => SubType(left, right)
       case Sum(binding, lo, hi, body) =>
         Sum(binding, int(lo), int(hi), body)
+      case Product(binding, lo, hi, body) =>
+        Product(binding, int(lo), int(hi), body)
       case SuperType(left, right) => SuperType(left, right)
       case Tail(xs) => Tail(seq(xs)._1)
       case Take(xs, count) => Take(seq(xs)._1, int(count))

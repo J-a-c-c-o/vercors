@@ -504,7 +504,7 @@ case class SilverTransformation(
         CheckContractSatisfiability.withArg(checkSat),
         DesugarCollectionOperators,
         EncodeNdIndex,
-        SimplifySum,
+        SimplifyFolds,
         EncodeBitVectors.withArg(opaqueBitwiseOperators),
         // Translate internal types to domains
         ImportVector.withArg(adtImporter),

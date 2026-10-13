@@ -2,7 +2,9 @@ package vct.col.rewrite
 
 import vct.col.ast._
 import vct.col.origin._
+import vct.col.print.{Ctx, Group}
 import vct.col.ref.Ref
+import vct.col.resolve.ctx.RefVariable
 import vct.col.util.AstBuildHelpers._
 import vct.col.util.Substitute
 import vct.result.VerificationError.UserError
@@ -100,6 +102,17 @@ case object OpenMPToParBlock extends RewriterBuilder {
     override def code: String = "cannotTranslateOpenMP"
     override def text: String = o.messageInContext(message)
   }
+
+  case class CannotFuseLoops(o: Origin, message: String) extends UserError {
+    override def code: String = "cannotFuseOpenMPLoops"
+    override def text: String = o.messageInContext(
+      s"$message\n\nThese two loops have to be fused into a single loop, because both of them " +
+        "use `schedule(static)` and the first one uses `nowait`. That combination means the " +
+        "loops must make progress in lockstep, which a sequential parallel region cannot " +
+        "express. A fused parallel block has a single iteration variable and a single " +
+        "iteration space, so VerCors can only fuse loops that agree on those."
+    )
+  }
 }
 
 case class OpenMPToParBlock[Pre <: Generation]() extends Rewriter[Pre] {
@@ -110,6 +123,14 @@ case class OpenMPToParBlock[Pre <: Generation]() extends Rewriter[Pre] {
 
   private def fail(o: Origin, message: String): Nothing =
     throw CannotTranslateToParBlock(o, message)
+
+  private def failFuse(o: Origin, message: String): Nothing =
+    throw CannotFuseLoops(o, message)
+
+  private def showNode(e: Node[_]): String = {
+    implicit val ctx: Ctx = Ctx()
+    Group(e.show(ctx)).toStringWithContext(ctx)
+  }
 
   private def sameName(decl: Declaration[Pre], name: String): Boolean =
     decl.o.getPreferredNameOrElse().camel == name
@@ -550,7 +571,7 @@ case class OpenMPToParBlock[Pre <: Generation]() extends Rewriter[Pre] {
   }
 
   def canFuse(x: PPL[Pre], y: PPL[Pre]): Boolean =
-    x.isFor && y.isFor && x.hasStaticSchedule && y.hasStaticSchedule && x.isNoWait
+    x.isFor && y.isFor && x.hasStaticSchedule && y.hasStaticSchedule && x.isNoWait && x.from == y.from && x.to == y.to
 
   def bundle[X](
       op: (X, X) => X,
@@ -577,14 +598,106 @@ case class OpenMPToParBlock[Pre <: Generation]() extends Rewriter[Pre] {
     foldStar(unfoldStar(a).toSet.intersect(unfoldStar(b).toSet).toSeq)
   }
 
-  def mergeContext(a: Expr[Pre], b: Expr[Pre]): Expr[Pre] = {
+  private def variableOf(local: CLocal[Pre]): Option[Variable[Pre]] =
+    local.ref.collect { case RefVariable(v) => v }.headOption
+
+  private def rootVariable(e: Node[Pre]): Option[Variable[Pre]] =
+    e match {
+      case Local(Ref(v)) => Some(v)
+      case local: CLocal[Pre] => variableOf(local)
+      case AmbiguousLocation(inner) => rootVariable(inner)
+      case AmbiguousSubscript(arr, _) => rootVariable(arr)
+      case ArraySubscript(arr, _) => rootVariable(arr)
+      case PointerArraySubscript(arr, _) => rootVariable(arr)
+      case PointerSubscript(ptr, _) => rootVariable(ptr)
+      case PointerAdd(ptr, _) => rootVariable(ptr)
+      case DerefPointer(ptr) => rootVariable(ptr)
+      case AddrOf(inner) => rootVariable(inner)
+      case CFieldAccess(obj, _) => rootVariable(obj)
+      case CStructDeref(struct, _) => rootVariable(struct)
+      case Deref(obj, _) => rootVariable(obj)
+      case SilverDeref(obj, _) => rootVariable(obj)
+      case PermPointer(ptr, _, _) => rootVariable(ptr)
+      case PermPointerIndex(ptr, _, _) => rootVariable(ptr)
+      case _ => None
+    }
+
+  private def variablesMentioned(e: Node[Pre]): Set[Variable[Pre]] =
+    e.collect {
+      case Local(Ref(v)) => Some(v)
+      case local: CLocal[Pre] => variableOf(local)
+    }.flatten.toSet
+
+  private def writtenRoots(stat: Statement[Pre]): Option[Set[Variable[Pre]]] = {
+    val roots = mutable.Set[Variable[Pre]]()
+    var opaque = false
+
+    def add(target: Expr[Pre]): Unit =
+      rootVariable(target) match {
+        case Some(v) => roots += v
+        case None    => opaque = true
+      }
+
+    stat.visit {
+      case Assign(target, _) =>
+        add(target)
+      case AssignInitial(target, _) =>
+        add(target)
+      case AssignSuchThat(target, _) =>
+        add(target)
+      case PreAssignExpression(target, _) =>
+        add(target)
+      case PostAssignExpression(target, _) =>
+        add(target)
+      case InvokeProcedure(_, _, outArgs, _, _, _) =>
+        outArgs.foreach(add)
+      case InvokeMethod(_, _, _, outArgs, _, _, _) =>
+        outArgs.foreach(add)
+      case _: CInvocation[Pre] | _: ProcedureInvocation[Pre] |
+          _: MethodInvocation[Pre] | _: InvokeConstructor[Pre] | _: Send[Pre] |
+          _: Recv[Pre] | _: SeqUpdate[Pre] | _: GpgpuCudaKernelInvocation[Pre] |
+          _: ParStatement[Pre] =>
+        opaque = true
+      case _ => ()
+    }
+
+    if (opaque) None else Some(roots.toSet)
+  }
+
+  private def survivingGuarantees(
+      x: PPLBlock[Pre],
+      y: PPLBlock[Pre],
+  ): Seq[Expr[Pre]] =
+    writtenRoots(y.content) match {
+      case None => Nil
+      case Some(roots) =>
+        unfoldStar(x.ensures).filterNot { conjunct =>
+          variablesMentioned(conjunct).exists(roots.contains)
+        }
+    }
+
+  def mergeContext(
+      x: PPLBlock[Pre],
+      y: PPLBlock[Pre],
+      a: Expr[Pre],
+      b: Expr[Pre],
+  ): Expr[Pre] = {
     implicit val o: Origin = a.o
     val perms = mutable.LinkedHashMap[Location[Pre], Expr[Pre]]()
     val otherParts = mutable.LinkedHashSet[Expr[Pre]]()
     (unfoldStar(a) ++ unfoldStar(b)).foreach {
       case Perm(loc, amount) =>
-        if (!perms.contains(loc))
-          perms(loc) = amount
+        perms.get(loc) match {
+          case None => perms(loc) = amount
+          case Some(other) if other == amount => ()
+          case Some(other) =>
+            failFuse(
+              y.o,
+              s"These loops disagree about the permission on `${showNode(loc)}`: the first one " +
+                s"has `${showNode(amount)}` and the second one has `${showNode(other)}`. " +
+                "Give both loops the same permission on this location.",
+            )
+        }
       case other =>
         if (other != tt)
           otherParts += other
@@ -611,10 +724,16 @@ case class OpenMPToParBlock[Pre <: Generation]() extends Rewriter[Pre] {
       to = x.to,
       context = tt,
       requires = mergeContext(
+        x,
+        y,
         x.requires,
         sub.dispatch(commonParts(y.requires, y.ensures)),
       ),
-      ensures = sub.dispatch(y.ensures),
+      ensures = {
+        implicit val o: Origin = x.ensures.o
+        val ensured = unfoldStar(y.ensures).map(sub.dispatch)
+        foldStar((ensured ++ survivingGuarantees(x, y)).distinct)
+      },
       content = Block[Pre](Seq(x.content, sub.dispatch(y.content))),
       clauses = x.clauses,
       o = x.o,

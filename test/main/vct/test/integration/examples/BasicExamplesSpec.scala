@@ -35,6 +35,7 @@ class BasicExamplesSpec extends VercorsSpec {
   vercors should verify using anyBackend example "concepts/basic/seq-item-access.pvl"
   vercors should verify using anyBackend example "concepts/basic/seq-length.pvl"
   vercors should verify using anyBackend example "concepts/basic/seq-seq-length.pvl"
+  vercors should verify using anyBackend example "concepts/basic/prodints.pvl"
   vercors should verify using anyBackend example "concepts/basic/sumints.pvl"
   vercors should verify using anyBackend example "concepts/basic/TernaryOperator.java"
   vercors should verify using anyBackend example "concepts/basic/test-1.c"

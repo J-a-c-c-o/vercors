@@ -468,6 +468,9 @@ case class LLVMContractToCol[G](
       case ValSum(_, _, t, id, _, _, lo, _, hi, _, _, body, _) =>
         val binding = createVariable(e, id, t)
         Sum(binding, convert(lo), convert(hi), convert(body))
+      case ValProd(_, _, t, id, _, _, lo, _, hi, _, _, body, _) =>
+        val binding = createVariable(e, id, t)
+        Product(binding, convert(lo), convert(hi), convert(body))
       case ValVectorSum(_, _, rng, _, vec, _) =>
         VectorSum(convert(rng), convert(vec))
       case ValVectorCmp(_, _, left, _, right, _) =>

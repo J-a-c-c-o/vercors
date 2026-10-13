@@ -147,6 +147,7 @@ FORALL_STAR_UNICODE: '\u2200*';
 EXISTS_UNICODE: '\u2203';
 LET: '\\let';
 SUM: '\\sum';
+PROD: '\\prod';
 CHOOSE: '\\choose';
 CHOOSE_FRESH: '\\choose_fresh';
 LENGTH: '\\length';
