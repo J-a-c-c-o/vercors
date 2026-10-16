@@ -231,6 +231,7 @@ valPrimaryBinder
 valPrimaryVector
   : '(' '\\sum' langType langId '\\in' '{' langExpr '..' langExpr '}' ';' langExpr ')' # valSum
  | '(' '\\prod' langType langId '\\in' '{' langExpr '..' langExpr '}' ';' langExpr ')' # valProd
+ | '(' '\\numof' langType langId '\\in' '{' langExpr '..' langExpr '}' ';' langExpr ')' # valNumOf
  | '\\sum' '(' langExpr ',' langExpr ')' # valVectorSum
  | '\\vcmp' '(' langExpr ',' langExpr ')' # valVectorCmp
  | '\\vrep' '(' langExpr ')' # valVectorRep

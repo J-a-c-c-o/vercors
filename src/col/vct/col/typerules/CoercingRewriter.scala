@@ -2092,6 +2092,8 @@ abstract class CoercingRewriter[Pre <: Generation]()
         Sum(binding, int(lo), int(hi), body)
       case Product(binding, lo, hi, body) =>
         Product(binding, int(lo), int(hi), body)
+      case NumOf(binding, lo, hi, body) =>
+        NumOf(binding, int(lo), int(hi), bool(body))
       case SuperType(left, right) => SuperType(left, right)
       case Tail(xs) => Tail(seq(xs)._1)
       case Take(xs, count) => Take(seq(xs)._1, int(count))

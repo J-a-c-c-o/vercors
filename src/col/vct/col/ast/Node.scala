@@ -1552,6 +1552,15 @@ final case class Product[G](
     extends Binder[G] with ProductImpl[G]
 @scopes[Variable]
 @scopes[LocalHeapVariable]
+final case class NumOf[G](
+    binding: Variable[G],
+    lo: Expr[G],
+    hi: Expr[G],
+    body: Expr[G],
+)(implicit val o: Origin)
+    extends Binder[G] with NumOfImpl[G]
+@scopes[Variable]
+@scopes[LocalHeapVariable]
 final case class ForPerm[G](
     bindings: Seq[Variable[G]],
     loc: Location[G],

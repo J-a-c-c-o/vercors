@@ -59,6 +59,7 @@ case class Namer[G](syntax: Ctx.Syntax) {
       case _: Exists[G] => ()
       case _: Sum[G] => ()
       case _: Product[G] => ()
+      case _: NumOf[G] => ()
       case _: Let[G] => ()
       case _: ScopedExpr[G] => ()
       case _: ForPerm[G] => ()

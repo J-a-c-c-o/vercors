@@ -571,7 +571,12 @@ case class OpenMPToParBlock[Pre <: Generation]() extends Rewriter[Pre] {
   }
 
   def canFuse(x: PPL[Pre], y: PPL[Pre]): Boolean =
-    x.isFor && y.isFor && x.hasStaticSchedule && y.hasStaticSchedule && x.isNoWait && x.from == y.from && x.to == y.to
+    (x, y) match {
+      case (xb: PPLBlock[Pre], yb: PPLBlock[Pre]) =>
+        xb.isFor && yb.isFor && xb.hasStaticSchedule && yb.hasStaticSchedule &&
+          xb.isNoWait && !yb.isNoWait && xb.from == yb.from && xb.to == yb.to
+      case _ => false
+    }
 
   def bundle[X](
       op: (X, X) => X,

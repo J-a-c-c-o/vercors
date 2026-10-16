@@ -2262,6 +2262,10 @@ case class CPPToCol[G](
 
   def convert(implicit e: ValPrimaryVectorContext): Expr[G] =
     e match {
+      case ValNumOf(_, _, t, id, _, _, lo, _, hi, _, _, body, _) =>
+        val binding =
+          new Variable[G](convert(t))(origin(id).sourceName(convert(id)))
+        NumOf(binding, convert(lo), convert(hi), convert(body))
       case ValSum(_, _, t, id, _, _, lo, _, hi, _, _, body, _) =>
         val binding =
           new Variable[G](convert(t))(origin(id).sourceName(convert(id)))

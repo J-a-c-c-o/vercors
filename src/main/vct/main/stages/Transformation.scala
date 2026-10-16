@@ -50,6 +50,7 @@ import vct.rewrite.{
   LowerHeapVariables,
   MakeUniqueMethodCopies,
   MonomorphizeClass,
+  NumOfToSum,
   PrettifyBlocks,
   SmtlibToProverTypes,
   TypeQualifierCoercion,
@@ -382,6 +383,7 @@ case class SilverTransformation(
 ) extends Transformation(
       onPassEvent,
       Seq(
+        NumOfToSum,
         CTypeConversions.withArg(checkIntegerBounds, unsetTarget),
         EncodeBoundsChecks,
         // Replace leftover SYCL types

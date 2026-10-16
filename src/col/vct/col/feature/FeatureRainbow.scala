@@ -412,6 +412,7 @@ class FeatureRainbow[G] {
 
       case node: Sum[G] => NumericReductionOperator
       case node: Product[G] => NumericReductionOperator
+      case node: NumOf[G] => NumericReductionOperator
 
       case node: ParInvariant[G] => ParallelRegion
       case node: ParAtomic[G] => ParallelRegion
