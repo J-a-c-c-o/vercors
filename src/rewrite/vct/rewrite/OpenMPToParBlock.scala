@@ -629,8 +629,12 @@ case class OpenMPToParBlock[Pre <: Generation]() extends Rewriter[Pre] {
       content = Block[Pre](Seq(
         x.content,
         {
+          implicit val o: Origin = y.requires.o
+          Assert(sub.dispatch(y.requires))(o)
+        },
+        {
           implicit val o: Origin = x.ensures.o
-          Assert(x.ensures)(x.o)
+          Assert(x.ensures)(o)
         },
         sub.dispatch(y.content),
       )),
